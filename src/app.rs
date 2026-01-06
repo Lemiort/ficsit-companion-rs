@@ -1,3 +1,52 @@
+/// A minimal node payload used for the demo
+#[derive(Clone)]
+pub struct SimpleNode {
+    pub label: String,
+}
+
+impl SimpleNode {
+    pub fn new(label: impl Into<String>) -> Self {
+        Self { label: label.into() }
+    }
+}
+
+#[derive(Default)]
+struct SimpleViewer;
+
+impl egui_snarl::ui::SnarlViewer<SimpleNode> for SimpleViewer {
+    fn title(&mut self, node: &SimpleNode) -> String {
+        node.label.clone()
+    }
+
+    fn inputs(&mut self, _node: &SimpleNode) -> usize {
+        1
+    }
+
+    fn outputs(&mut self, _node: &SimpleNode) -> usize {
+        1
+    }
+
+    fn show_input(
+        &mut self,
+        _pin: &egui_snarl::InPin,
+        ui: &mut egui::Ui,
+        _snarl: &mut egui_snarl::Snarl<SimpleNode>,
+    ) -> impl egui_snarl::ui::SnarlPin + 'static {
+        ui.label("In");
+        egui_snarl::ui::PinInfo::circle()
+    }
+
+    fn show_output(
+        &mut self,
+        _pin: &egui_snarl::OutPin,
+        ui: &mut egui::Ui,
+        _snarl: &mut egui_snarl::Snarl<SimpleNode>,
+    ) -> impl egui_snarl::ui::SnarlPin + 'static {
+        ui.label("Out");
+        egui_snarl::ui::PinInfo::circle()
+    }
+}
+
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
@@ -5,16 +54,33 @@ pub struct TemplateApp {
     // Example stuff:
     label: String,
 
-    #[serde(skip)] // This how you opt-out of serialization of a field
+    #[serde(skip)] // runtime-only
     value: f32,
+
+    #[serde(skip)]
+    snarl: egui_snarl::Snarl<SimpleNode>,
+
+    #[serde(skip)]
+    snarl_viewer: SimpleViewer,
+
+    #[serde(skip)]
+    snarl_style: egui_snarl::ui::SnarlStyle,
 }
 
 impl Default for TemplateApp {
     fn default() -> Self {
+        let mut snarl = egui_snarl::Snarl::new();
+        // add a couple of demo nodes
+        snarl.insert_node(egui::pos2(0.0, 0.0), SimpleNode::new("Node A"));
+        snarl.insert_node(egui::pos2(250.0, 0.0), SimpleNode::new("Node B"));
+
         Self {
             // Example stuff:
             label: "Hello World!".to_owned(),
             value: 2.7,
+            snarl,
+            snarl_viewer: SimpleViewer::default(),
+            snarl_style: egui_snarl::ui::SnarlStyle::new(),
         }
     }
 }
@@ -85,6 +151,16 @@ impl eframe::App for TemplateApp {
                 "https://github.com/emilk/eframe_template/blob/main/",
                 "Source code."
             ));
+
+            ui.collapsing("Node Editor (egui-snarl demo)", |ui| {
+                ui.label("Drag pins to connect nodes. Right click for menu.");
+                egui::ScrollArea::both().show(ui, |ui| {
+                    egui_snarl::ui::SnarlWidget::new()
+                        .id(egui::Id::new("snarl-demo"))
+                        .style(self.snarl_style)
+                        .show(&mut self.snarl, &mut self.snarl_viewer, ui);
+                });
+            });
 
             ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                 powered_by_egui_and_eframe(ui);
