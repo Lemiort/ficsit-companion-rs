@@ -104,6 +104,225 @@ impl ProductionApp {
         None
     }
 
+    /// Get pin item names for a node (inputs, outputs)
+    pub fn get_node_pin_item_names(&self, node_id: u64) -> Option<(Vec<Option<String>>, Vec<Option<String>>)> {
+        let idx = self.find_node_index(node_id)?;
+        let node_any = &self.nodes[idx];
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            let ins = n.base.ins.iter().map(|p| p.item_name.clone()).collect();
+            let outs = n.base.outs.iter().map(|p| p.item_name.clone()).collect();
+            return Some((ins, outs));
+        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+            let ins = n.base.ins.iter().map(|p| p.item_name.clone()).collect();
+            let outs = n.base.outs.iter().map(|p| p.item_name.clone()).collect();
+            return Some((ins, outs));
+        } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+            let ins = n.base.ins.iter().map(|p| p.item_name.clone()).collect();
+            let outs = n.base.outs.iter().map(|p| p.item_name.clone()).collect();
+            return Some((ins, outs));
+        } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+            let ins = n.base.ins.iter().map(|p| p.item_name.clone()).collect();
+            let outs: Vec<Option<String>> = Vec::new();
+            return Some((ins, outs));
+        }
+        None
+    }
+
+    /// Add a craft node with the given recipe name
+    pub fn add_craft_node(&mut self, recipe_name: &str, game_data: &GameData) -> Result<u64, String> {
+        // Find recipe by name
+        let recipe = game_data.recipes.iter()
+            .find(|r| r.name == recipe_name)
+            .ok_or_else(|| format!("Recipe '{}' not found", recipe_name))?;
+        
+        let node_id = self.get_next_id();
+        let mut craft_node = CraftNode::new(node_id, recipe_name.to_string());
+        
+        // Create input pins
+        for item in &recipe.ins {
+            let pin_id = self.get_next_id();
+            craft_node.base.ins.push(Pin::new(
+                pin_id,
+                PinDirection::Input,
+                node_id,
+                Some(item.item_name.clone()),
+                false,
+                FractionalNumber::default(),
+            ));
+        }
+        
+        // Create output pins
+        for item in &recipe.outs {
+            let pin_id = self.get_next_id();
+            craft_node.base.outs.push(Pin::new(
+                pin_id,
+                PinDirection::Output,
+                node_id,
+                Some(item.item_name.clone()),
+                false,
+                FractionalNumber::default(),
+            ));
+        }
+        
+        self.nodes.push(Box::new(craft_node));
+        Ok(node_id)
+    }
+
+    /// Add a merger node
+    pub fn add_merger_node(&mut self) -> u64 {
+        let node_id = self.get_next_id();
+        let mut merger = OrganizerNode::new(node_id, NodeKind::Merger, None);
+        
+        // Create 2 input pins and 1 output pin
+        for _ in 0..2 {
+            let pin_id = self.get_next_id();
+            merger.base.ins.push(Pin::new(
+                pin_id,
+                PinDirection::Input,
+                node_id,
+                None,
+                false,
+                FractionalNumber::default(),
+            ));
+        }
+        
+        let out_pin_id = self.get_next_id();
+        merger.base.outs.push(Pin::new(
+            out_pin_id,
+            PinDirection::Output,
+            node_id,
+            None,
+            false,
+            FractionalNumber::default(),
+        ));
+        
+        self.nodes.push(Box::new(merger));
+        node_id
+    }
+
+    /// Add a custom splitter node
+    pub fn add_custom_splitter_node(&mut self) -> u64 {
+        let node_id = self.get_next_id();
+        let mut splitter = OrganizerNode::new(node_id, NodeKind::CustomSplitter, None);
+        
+        // Create 1 input pin and 2 output pins
+        let in_pin_id = self.get_next_id();
+        splitter.base.ins.push(Pin::new(
+            in_pin_id,
+            PinDirection::Input,
+            node_id,
+            None,
+            false,
+            FractionalNumber::default(),
+        ));
+        
+        for _ in 0..2 {
+            let pin_id = self.get_next_id();
+            splitter.base.outs.push(Pin::new(
+                pin_id,
+                PinDirection::Output,
+                node_id,
+                None,
+                false,
+                FractionalNumber::default(),
+            ));
+        }
+        
+        self.nodes.push(Box::new(splitter));
+        node_id
+    }
+
+    /// Add a game splitter node (equal distribution)
+    pub fn add_game_splitter_node(&mut self) -> u64 {
+        let node_id = self.get_next_id();
+        let mut splitter = OrganizerNode::new(node_id, NodeKind::GameSplitter, None);
+        
+        // Create 1 input pin and 2 output pins
+        let in_pin_id = self.get_next_id();
+        splitter.base.ins.push(Pin::new(
+            in_pin_id,
+            PinDirection::Input,
+            node_id,
+            None,
+            false,
+            FractionalNumber::default(),
+        ));
+        
+        for _ in 0..2 {
+            let pin_id = self.get_next_id();
+            splitter.base.outs.push(Pin::new(
+                pin_id,
+                PinDirection::Output,
+                node_id,
+                None,
+                false,
+                FractionalNumber::default(),
+            ));
+        }
+        
+        self.nodes.push(Box::new(splitter));
+        node_id
+    }
+
+    /// Add a sink node
+    pub fn add_sink_node(&mut self) -> u64 {
+        let node_id = self.get_next_id();
+        let mut sink = SinkNode::new(node_id, None);
+        
+        // Create 1 input pin
+        let pin_id = self.get_next_id();
+        sink.base.ins.push(Pin::new(
+            pin_id,
+            PinDirection::Input,
+            node_id,
+            None,
+            false,
+            FractionalNumber::default(),
+        ));
+        
+        self.nodes.push(Box::new(sink));
+        node_id
+    }
+
+    /// Delete a node and all its links
+    pub fn delete_node(&mut self, node_id: u64) -> Result<(), String> {
+        let node_idx = self.find_node_index(node_id)
+            .ok_or_else(|| format!("Node {} not found", node_id))?;
+        
+        // Find all pins for this node
+        let mut pin_ids = Vec::new();
+        let node_any = &self.nodes[node_idx];
+        
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            pin_ids.extend(n.base.ins.iter().map(|p| p.id));
+            pin_ids.extend(n.base.outs.iter().map(|p| p.id));
+        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+            pin_ids.extend(n.base.ins.iter().map(|p| p.id));
+            pin_ids.extend(n.base.outs.iter().map(|p| p.id));
+        } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+            pin_ids.extend(n.base.ins.iter().map(|p| p.id));
+            pin_ids.extend(n.base.outs.iter().map(|p| p.id));
+        } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+            pin_ids.extend(n.base.ins.iter().map(|p| p.id));
+        }
+        
+        // Delete all links connected to this node's pins
+        let mut links_to_delete = Vec::new();
+        for pin_id in pin_ids {
+            if let Some(link) = self.find_link_by_pin(pin_id) {
+                links_to_delete.push(link.id);
+            }
+        }
+        
+        for link_id in links_to_delete {
+            self.delete_link(link_id)?;
+        }
+        
+        // Remove the node
+        self.nodes.remove(node_idx);
+        Ok(())
+    }
+
     /// Find a link by pin ID
     pub fn find_link_by_pin(&self, pin_id: u64) -> Option<&Link> {
         self.links

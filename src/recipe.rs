@@ -6,17 +6,18 @@ use serde::{Deserialize, Serialize};
 pub struct Item {
     pub name: String,
     pub new_line_name: String, // Name with spaces replaced by newlines for display
+    pub icon_path: String, // Relative path (from assets/icons) or filename
     pub icon_texture_id: Option<egui::TextureId>, // Will be loaded from image file
     pub sink_value: i32, // Points when sent to AWESOME Sink
 }
 
 impl Item {
-    pub fn new(name: String, _icon_path: &str, sink_value: i32) -> Self {
+    pub fn new(name: String, icon_path: &str, sink_value: i32) -> Self {
         let new_line_name = name.replace(' ', "\n");
-        // Icon loading will be handled separately
         Self {
             name,
             new_line_name,
+            icon_path: icon_path.to_string(),
             icon_texture_id: None,
             sink_value,
         }
