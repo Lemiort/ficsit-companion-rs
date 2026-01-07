@@ -10,11 +10,15 @@ pub struct EditorNode {
     #[allow(dead_code)]
     pub node_type: String,
 
-    // Pin metadata for icons and labels
+    // Pin metadata for icons, labels, rates and locked state
     pub input_names: Vec<Option<String>>,
     pub input_icons: Vec<Option<egui::TextureId>>,
+    pub input_rates: Vec<Option<String>>,
+    pub input_locked: Vec<bool>,
     pub output_names: Vec<Option<String>>,
     pub output_icons: Vec<Option<egui::TextureId>>,
+    pub output_rates: Vec<Option<String>>,
+    pub output_locked: Vec<bool>,
 }
 
 impl EditorNode {
@@ -25,8 +29,12 @@ impl EditorNode {
             node_type: node_type.into(),
             input_names: Vec::new(),
             input_icons: Vec::new(),
+            input_rates: Vec::new(),
+            input_locked: Vec::new(),
             output_names: Vec::new(),
             output_icons: Vec::new(),
+            output_rates: Vec::new(),
+            output_locked: Vec::new(),
         }
     }
 
@@ -36,8 +44,12 @@ impl EditorNode {
         node_type: impl Into<String>,
         input_names: Vec<Option<String>>,
         input_icons: Vec<Option<egui::TextureId>>,
+        input_rates: Vec<Option<String>>,
+        input_locked: Vec<bool>,
         output_names: Vec<Option<String>>,
         output_icons: Vec<Option<egui::TextureId>>,
+        output_rates: Vec<Option<String>>,
+        output_locked: Vec<bool>,
     ) -> Self {
         Self {
             id,
@@ -45,11 +57,18 @@ impl EditorNode {
             node_type: node_type.into(),
             input_names,
             input_icons,
+            input_rates,
+            input_locked,
             output_names,
             output_icons,
+            output_rates,
+            output_locked,
         }
     }
 }
+
+use std::collections::HashMap;
+use crate::pin::PinDirection;
 
 #[derive(Default, Debug)]
 struct SnarlViewer {
@@ -58,6 +77,63 @@ struct SnarlViewer {
     // Cursors advanced by show_input/show_output calls to get the pin index in order
     input_cursor: usize,
     output_cursor: usize,
+
+    // Temporary edit buffers for pin rate editing: key -> string
+    edit_buffers: HashMap<String, String>,
+
+    // Pending edits committed by the UI that TemplateApp should process after the Snarl widget is shown
+    pending_pin_rate_edits: Vec<(u64, PinDirection, usize, String)>,
+}
+
+impl SnarlViewer {
+    fn drain_pending_edits(&mut self) -> Vec<(u64, PinDirection, usize, String)> {
+        std::mem::take(&mut self.pending_pin_rate_edits)
+    }
+
+    // Render a fractional number input similar to C++ RenderInputText.
+    // Returns the response so caller can inspect focus/hover for tooltips.
+    fn render_fractional_input(&mut self, ui: &mut egui::Ui, key: &str, buf: &mut String, width: f32, disabled: bool) -> egui::Response {
+        // Ensure buffer exists in edit_buffers
+        self.edit_buffers.entry(key.to_owned()).or_insert_with(|| buf.clone());
+        let buf_ref = self.edit_buffers.get_mut(key).unwrap();
+
+        // Reserve a rectangle of exact size for the input
+        let (rect, _alloc_response) = ui.allocate_exact_size(egui::Vec2::new(width, ui.spacing().interact_size.y), egui::Sense::click());
+
+        if disabled {
+            // Purple-ish locked background and render text label (white)
+            ui.painter().rect_filled(rect, 4.0, egui::Color32::from_rgb(120, 70, 160));
+            let text_pos = egui::pos2(rect.left() + 6.0, rect.center().y - 6.0);
+            ui.painter().text(text_pos, egui::Align2::LEFT_CENTER, buf_ref.as_str(), egui::FontId::default(), egui::Color32::WHITE);
+            let resp = ui.interact(rect, ui.id().with(key), egui::Sense::hover());
+            if resp.hovered() {
+                if let Ok(f) = crate::fractional_number::FractionalNumber::from_string(buf_ref) {
+                    let tip = format!("{} = {}", f.to_fraction_string(), f.to_float_string());
+                    return resp.on_hover_text(tip);
+                }
+            }
+            return resp;
+        }
+
+        // Active input: render TextEdit inside the reserved rect
+        let text_edit = egui::TextEdit::singleline(buf_ref).desired_width(width);
+        let response = ui.put(rect, text_edit);
+
+        // Focus highlight (blue)
+        if response.has_focus() || response.gained_focus() {
+            ui.painter().rect_filled(rect.expand(2.0), 4.0, egui::Color32::from_rgba_unmultiplied(30, 70, 120, 60));
+        }
+
+        // Tooltip showing parsed fraction and decimal value
+        if response.hovered() {
+            if let Ok(f) = crate::fractional_number::FractionalNumber::from_string(buf_ref) {
+                let tip = format!("{} = {}", f.to_fraction_string(), f.to_float_string());
+                return response.on_hover_text(tip);
+            }
+        }
+
+        response
+    }
 }
 
 impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
@@ -84,16 +160,37 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
         _snarl: &mut egui_snarl::Snarl<EditorNode>,
     ) -> impl egui_snarl::ui::SnarlPin + 'static {
         let size = egui::Vec2::splat(ui.spacing().interact_size.y * 1.2);
-        if let Some(node) = &self.current_node {
+        if let Some(node_ref) = &self.current_node {
+            let node = node_ref.clone();
             let idx = self.input_cursor;
             self.input_cursor += 1;
             ui.horizontal(|ui| {
+                // Rate first (near outer edge for inputs)
+                if let Some(Some(rate)) = node.input_rates.get(idx) {
+                    let key = format!("pin:{}:in:{}", node.id, idx);
+                    // Use helper to render small input with highlight
+                    // Use a conservative fixed width similar to C++ "0000.000"
+                    let desired_width = 88.0;
+                    let mut tmp = rate.clone();
+                    let disabled = node.input_locked.get(idx).copied().unwrap_or(false);
+                    let response = self.render_fractional_input(ui, &key, &mut tmp, desired_width, disabled);
+                    if response.lost_focus() && response.changed() {
+                        if let Some(buf) = self.edit_buffers.get(&key) {
+                            self.pending_pin_rate_edits.push((node.id, PinDirection::Input, idx, buf.clone()));
+                        }
+                    }
+                    ui.add_space(6.0);
+                }
+
+                // Icon next (inward)
                 if let Some(Some(tex)) = node.input_icons.get(idx) {
-                    eprintln!("show_input: node {} input[{}] has texture {:?}", node.id, idx, tex);
                     // Use the image widget to draw the texture (lets egui handle clipping/alpha)
                     ui.image((*tex, size));
-                } else if let Some(Some(name)) = node.input_names.get(idx) {
-                    eprintln!("show_input: node {} input[{}] name={}", node.id, idx, name);
+                    ui.add_space(6.0);
+                }
+
+                // Label closest to center
+                if let Some(Some(name)) = node.input_names.get(idx) {
                     ui.label(name);
                 } else {
                     ui.label("In");
@@ -112,19 +209,43 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
         _snarl: &mut egui_snarl::Snarl<EditorNode>,
     ) -> impl egui_snarl::ui::SnarlPin + 'static {
         let size = egui::Vec2::splat(ui.spacing().interact_size.y * 1.2);
-        if let Some(node) = &self.current_node {
+        if let Some(node_ref) = &self.current_node {
+            let node = node_ref.clone();
             let idx = self.output_cursor;
             self.output_cursor += 1;
             ui.horizontal(|ui| {
-                if let Some(Some(name)) = node.output_names.get(idx) {
-                    eprintln!("show_output: node {} output[{}] name={}", node.id, idx, name);
-                    ui.label(name);
-                }
-                if let Some(Some(tex)) = node.output_icons.get(idx) {
-                    eprintln!("show_output: node {} output[{}] has texture {:?}", node.id, idx, tex);
-                    // Use widget-based image drawing
-                    ui.image((*tex, size));
-                }
+                // Use a right-to-left layout inside the row so the rate aligns to the node's right edge
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Rate first (near outer edge for outputs)
+                    if let Some(Some(rate)) = node.output_rates.get(idx) {
+                        let key = format!("pin:{}:out:{}", node.id, idx);
+                        // Use a conservative fixed width similar to C++ "0000.000"
+                        let desired_width = 88.0;
+                        let mut tmp = rate.clone();
+                        let disabled = node.output_locked.get(idx).copied().unwrap_or(false);
+                        let response = self.render_fractional_input(ui, &key, &mut tmp, desired_width, disabled);
+                        if response.lost_focus() && response.changed() {
+                            if let Some(buf) = self.edit_buffers.get(&key) {
+                                self.pending_pin_rate_edits.push((node.id, PinDirection::Output, idx, buf.clone()));
+                            }
+                        }
+                        ui.add_space(6.0);
+                    }
+
+                    // Icon next (inward)
+                    if let Some(Some(tex)) = node.output_icons.get(idx) {
+                        // Use widget-based image drawing
+                        ui.image((*tex, size));
+                        ui.add_space(6.0);
+                    }
+
+                    // Label closest to center
+                    if let Some(Some(name)) = node.output_names.get(idx) {
+                        ui.label(name);
+                    } else {
+                        ui.label("Out");
+                    }
+                });
             });
         } else {
             ui.label("Out");
@@ -320,17 +441,14 @@ impl TemplateApp {
             .get_node_pin_item_names(node_id)
             .unwrap_or((Vec::new(), Vec::new()));
 
-        // Debug: print mapping of pin names to whether an icon exists in cache
-        eprintln!("build_editor_node {}: inputs:", node_id);
-        for (i, n) in input_names.iter().enumerate() {
-            let has = n.as_ref().map(|s| self.item_icon_cache.contains_key(s)).unwrap_or(false);
-            eprintln!("  input[{}]: {:?} -> has_icon={}", i, n, has);
-        }
-        eprintln!("build_editor_node {}: outputs:", node_id);
-        for (i, n) in output_names.iter().enumerate() {
-            let has = n.as_ref().map(|s| self.item_icon_cache.contains_key(s)).unwrap_or(false);
-            eprintln!("  output[{}]: {:?} -> has_icon={}", i, n, has);
-        }
+        // Fetch locked flags from production model
+        let (input_locked_flags, output_locked_flags) = self
+            .production_app
+            .get_node_pin_locked_flags(node_id)
+            .unwrap_or((Vec::new(), Vec::new()));
+
+        // Map icons
+        // (no debug prints) 
 
         let input_icons: Vec<Option<egui::TextureId>> = input_names
             .iter()
@@ -342,14 +460,24 @@ impl TemplateApp {
             .map(|opt_name| opt_name.as_ref().and_then(|n| self.item_icon_cache.get(n).map(|h| h.id())))
             .collect();
 
+        // Fetch rates from production model so UI can display them
+        let (input_rates, output_rates) = self
+            .production_app
+            .get_node_pin_rates(node_id)
+            .unwrap_or((Vec::new(), Vec::new()));
+
         EditorNode::with_pins(
             node_id,
             label,
             node_type,
             input_names,
             input_icons,
+            input_rates,
+            input_locked_flags,
             output_names,
             output_icons,
+            output_rates,
+            output_locked_flags,
         )
     }
 }
@@ -448,7 +576,7 @@ impl TemplateApp {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         for name in ["Iron Ingot", "Iron Plate", "Rocket Fuel"].iter() {
                             if let Some(handle) = self.item_icon_cache.get(*name) {
-                                eprintln!("topbar: drawing icon for {} -> {:?}", name, handle.id());
+
                                 let size = egui::Vec2::splat(28.0);
                                 let (rect, _resp) = ui.allocate_exact_size(size, egui::Sense::hover());
                                 ui.painter().image(handle.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
@@ -568,6 +696,30 @@ impl TemplateApp {
                 .id(egui::Id::new("production-snarl"))
                 .style(self.snarl_style)
                 .show(&mut self.snarl, &mut self.snarl_viewer, ui);
+
+            // Process pending pin rate edits collected by the SnarlViewer during rendering
+            for (node_id, dir, idx, text) in self.snarl_viewer.drain_pending_edits() {
+                match crate::fractional_number::FractionalNumber::from_string(&text) {
+                    Ok(f) => {
+                        if crate::rate_calculator::validate_rate(&f) {
+                            match self.production_app.set_pin_rate(node_id, dir, idx, f) {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    self.error_message = format!("Error: {}", e);
+                                    self.error_time = 3.0;
+                                }
+                            }
+                        } else {
+                            self.error_message = "Invalid rate (negative)".to_string();
+                            self.error_time = 2.0;
+                        }
+                    }
+                    Err(_) => {
+                        self.error_message = "Invalid rate format".to_string();
+                        self.error_time = 2.0;
+                    }
+                }
+            }
 
             // Detect right-click to show add node popup (like C++ ShowBackgroundContextMenu)
             if snarl_response.secondary_clicked() {

@@ -128,6 +128,162 @@ impl ProductionApp {
         None
     }
 
+    /// Get pin rates for a node (inputs, outputs) as float strings (e.g., "1.000")
+    pub fn get_node_pin_rates(&self, node_id: u64) -> Option<(Vec<Option<String>>, Vec<Option<String>>)> {
+        let idx = self.find_node_index(node_id)?;
+        let node_any = &self.nodes[idx];
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            let ins = n
+                .base
+                .ins
+                .iter()
+                .map(|p| Some(p.current_rate.to_float_string()))
+                .collect();
+            let outs = n
+                .base
+                .outs
+                .iter()
+                .map(|p| Some(p.current_rate.to_float_string()))
+                .collect();
+            return Some((ins, outs));
+        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+            let ins = n
+                .base
+                .ins
+                .iter()
+                .map(|p| Some(p.current_rate.to_float_string()))
+                .collect();
+            let outs = n
+                .base
+                .outs
+                .iter()
+                .map(|p| Some(p.current_rate.to_float_string()))
+                .collect();
+            return Some((ins, outs));
+        } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+            let ins = n
+                .base
+                .ins
+                .iter()
+                .map(|p| Some(p.current_rate.to_float_string()))
+                .collect();
+            let outs = n
+                .base
+                .outs
+                .iter()
+                .map(|p| Some(p.current_rate.to_float_string()))
+                .collect();
+            return Some((ins, outs));
+        } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+            let ins = n
+                .base
+                .ins
+                .iter()
+                .map(|p| Some(p.current_rate.to_float_string()))
+                .collect();
+            let outs: Vec<Option<String>> = Vec::new();
+            return Some((ins, outs));
+        }
+        None
+    }
+
+    /// Get pin locked flags for a node (inputs, outputs)
+    pub fn get_node_pin_locked_flags(&self, node_id: u64) -> Option<(Vec<bool>, Vec<bool>)> {
+        let idx = self.find_node_index(node_id)?;
+        let node_any = &self.nodes[idx];
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            let ins = n.base.ins.iter().map(|p| p.locked).collect();
+            let outs = n.base.outs.iter().map(|p| p.locked).collect();
+            return Some((ins, outs));
+        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+            let ins = n.base.ins.iter().map(|p| p.locked).collect();
+            let outs = n.base.outs.iter().map(|p| p.locked).collect();
+            return Some((ins, outs));
+        } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+            let ins = n.base.ins.iter().map(|p| p.locked).collect();
+            let outs = n.base.outs.iter().map(|p| p.locked).collect();
+            return Some((ins, outs));
+        } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+            let ins = n.base.ins.iter().map(|p| p.locked).collect();
+            let outs: Vec<bool> = Vec::new();
+            return Some((ins, outs));
+        }
+        None
+    }
+
+    /// Apply a new rate typed by the user into a pin. Performs simple validation
+    /// and, for some node kinds (e.g., Craft), derives and applies a new node rate.
+    pub fn set_pin_rate(&mut self, node_id: u64, direction: PinDirection, pin_index: usize, new_rate: FractionalNumber) -> Result<(), String> {
+        // Validate rate first
+        if !crate::rate_calculator::validate_rate(&new_rate) {
+            return Err("Invalid rate".into());
+        }
+
+        let node_idx = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        let node_any = &mut self.nodes[node_idx];
+
+        // CraftNode: if setting an output's rate, derive the node rate
+        if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+            match direction {
+                PinDirection::Output => {
+                    if pin_index >= n.base.outs.len() { return Err("Output pin out of range".into()); }
+                    let base_rate = n.base.outs[pin_index].base_rate;
+                    if base_rate.numerator() == 0 { return Err("Base rate is zero".into()); }
+                    let new_node_rate = new_rate / base_rate;
+                    if !crate::rate_calculator::validate_rate(&new_node_rate) { return Err("Derived node rate invalid".into()); }
+                    n.update_rate(new_node_rate);
+                    return Ok(());
+                }
+                PinDirection::Input => {
+                    if pin_index >= n.base.ins.len() { return Err("Input pin out of range".into()); }
+                    n.base.ins[pin_index].current_rate = new_rate;
+                    return Ok(());
+                }
+            }
+        }
+
+        // Organizer nodes: set directly
+        if let Some(n) = node_any.downcast_mut::<OrganizerNode>() {
+            match direction {
+                PinDirection::Input => {
+                    if pin_index >= n.base.ins.len() { return Err("Input pin out of range".into()); }
+                    n.base.ins[pin_index].current_rate = new_rate;
+                    return Ok(());
+                }
+                PinDirection::Output => {
+                    if pin_index >= n.base.outs.len() { return Err("Output pin out of range".into()); }
+                    n.base.outs[pin_index].current_rate = new_rate;
+                    return Ok(());
+                }
+            }
+        }
+
+        // Group/Sink: set directly
+        if let Some(n) = node_any.downcast_mut::<GroupNode>() {
+            match direction {
+                PinDirection::Input => {
+                    if pin_index >= n.base.ins.len() { return Err("Input pin out of range".into()); }
+                    n.base.ins[pin_index].current_rate = new_rate;
+                    return Ok(());
+                }
+                PinDirection::Output => {
+                    if pin_index >= n.base.outs.len() { return Err("Output pin out of range".into()); }
+                    n.base.outs[pin_index].current_rate = new_rate;
+                    return Ok(());
+                }
+            }
+        }
+
+        if let Some(n) = node_any.downcast_mut::<SinkNode>() {
+            if direction != PinDirection::Input { return Err("Sink has no outputs".into()); }
+            if pin_index >= n.base.ins.len() { return Err("Input pin out of range".into()); }
+            n.base.ins[pin_index].current_rate = new_rate;
+            return Ok(());
+        }
+
+        Err("Unsupported node kind for rate edit".into())
+    }
+
     /// Add a craft node with the given recipe name
     pub fn add_craft_node(&mut self, recipe_name: &str, game_data: &GameData) -> Result<u64, String> {
         // Find recipe by name
@@ -1035,5 +1191,32 @@ impl ProductionApp {
 impl Default for ProductionApp {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_pin_rate_updates_craft_node_output() {
+        let mut app = ProductionApp::new();
+        // Create a craft node without relying on game data
+        let node_id = app.get_next_id();
+        let mut craft = CraftNode::new(node_id, "test_recipe".to_string());
+        // Create one output pin with base rate 2
+        let pin_id = app.get_next_id();
+        craft.base.outs.push(Pin::new(pin_id, PinDirection::Output, node_id, None, false, FractionalNumber::new(2,1)));
+        app.nodes.push(Box::new(craft));
+
+        let node_idx = app.find_node_index(node_id).expect("find node");
+
+        // Now set output pin rate to 6 -> node rate should become 3
+        app.set_pin_rate(node_id, PinDirection::Output, 0, FractionalNumber::new(6, 1)).expect("set_pin_rate");
+
+        // Re-borrow immutably to assert
+        let n = app.nodes[node_idx].downcast_ref::<CraftNode>().expect("expected craft node");
+        assert_eq!(n.current_rate, FractionalNumber::new(3, 1));
+        assert_eq!(n.base.outs[0].current_rate, FractionalNumber::new(6, 1));
     }
 }
