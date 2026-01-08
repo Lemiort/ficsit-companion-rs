@@ -368,12 +368,15 @@ impl Default for TemplateApp {
             eprintln!("Web platform: game data loading not yet implemented");
         }
         
+        let mut snarl_style = egui_snarl::ui::SnarlStyle::new();
+        snarl_style.collapsible = Some(false);
+        
         let mut app = Self {
             production_app: ProductionApp::new(),
             game_data,
             snarl: egui_snarl::Snarl::new(),
             snarl_viewer: SnarlViewer::default(),
-            snarl_style: egui_snarl::ui::SnarlStyle::new(),
+            snarl_style,
             left_panel_collapsed: false,
             save_name: String::new(),
             file_suggestions: Vec::new(),
