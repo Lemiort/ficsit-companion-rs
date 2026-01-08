@@ -77,6 +77,8 @@ struct SnarlViewer {
     // Cursors advanced by show_input/show_output calls to get the pin index in order
     input_cursor: usize,
     output_cursor: usize,
+    // Right edge anchor for output rows (per node) to avoid horizontal drift between rows
+    output_anchor_right: Option<f32>,
 
     // Temporary edit buffers for pin rate editing: key -> string
     edit_buffers: HashMap<String, String>,
@@ -150,6 +152,7 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
     fn outputs(&mut self, node: &EditorNode) -> usize {
         self.current_node = Some(node.clone());
         self.output_cursor = 0;
+        self.output_anchor_right = None;
         node.output_names.len()
     }
 
@@ -179,14 +182,12 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                             self.pending_pin_rate_edits.push((node.id, PinDirection::Input, idx, buf.clone()));
                         }
                     }
-                    ui.add_space(6.0);
                 }
 
                 // Icon next (inward)
                 if let Some(Some(tex)) = node.input_icons.get(idx) {
                     // Use the image widget to draw the texture (lets egui handle clipping/alpha)
                     ui.image((*tex, size));
-                    ui.add_space(6.0);
                 }
 
                 // Label closest to center
@@ -213,9 +214,36 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             let node = node_ref.clone();
             let idx = self.output_cursor;
             self.output_cursor += 1;
-            ui.horizontal(|ui| {
-                // Use a right-to-left layout inside the row so the rate aligns to the node's right edge
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Capture rects for debug logging
+            let mut rate_rect: Option<egui::Rect> = None;
+            let mut icon_rect: Option<egui::Rect> = None;
+            let mut label_rect: Option<egui::Rect> = None;
+
+            // Compute a fixed row width so all outputs align to the same right edge
+            let label_text = node
+                .output_names
+                .get(idx)
+                .and_then(|o| o.as_ref())
+                .map(|s| s.as_str())
+                .unwrap_or("Out");
+            let label_width = ui
+                .painter()
+                .layout_no_wrap(label_text.to_owned(), egui::FontId::default(), egui::Color32::WHITE)
+                .size()
+                .x;
+            let gap = 6.0;
+            let row_width = 88.0 + gap + size.x + gap + label_width;
+
+            // Advance layout but render into an anchored rect so rows don't drift
+            let (slot_rect, _slot_resp) = ui.allocate_exact_size(egui::vec2(row_width, size.y), egui::Sense::hover());
+            let anchor_right = *self.output_anchor_right.get_or_insert(slot_rect.right());
+            let anchored_rect = egui::Rect::from_min_max(
+                egui::pos2(anchor_right - row_width, slot_rect.top()),
+                egui::pos2(anchor_right, slot_rect.bottom()),
+            );
+
+            let _row = ui.scope_builder(egui::UiBuilder::new().max_rect(anchored_rect), |ui| {
+                ui.horizontal_centered(|ui| {
                     // Rate first (near outer edge for outputs)
                     if let Some(Some(rate)) = node.output_rates.get(idx) {
                         let key = format!("pin:{}:out:{}", node.id, idx);
@@ -224,26 +252,28 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                         let mut tmp = rate.clone();
                         let disabled = node.output_locked.get(idx).copied().unwrap_or(false);
                         let response = self.render_fractional_input(ui, &key, &mut tmp, desired_width, disabled);
+                        rate_rect = Some(response.rect);
                         if response.lost_focus() && response.changed() {
                             if let Some(buf) = self.edit_buffers.get(&key) {
                                 self.pending_pin_rate_edits.push((node.id, PinDirection::Output, idx, buf.clone()));
                             }
                         }
-                        ui.add_space(6.0);
                     }
 
                     // Icon next (inward)
                     if let Some(Some(tex)) = node.output_icons.get(idx) {
                         // Use widget-based image drawing
-                        ui.image((*tex, size));
-                        ui.add_space(6.0);
+                        let resp = ui.image((*tex, size));
+                        icon_rect = Some(resp.rect);
                     }
 
                     // Label closest to center
                     if let Some(Some(name)) = node.output_names.get(idx) {
-                        ui.label(name);
+                        let resp = ui.label(name);
+                        label_rect = Some(resp.rect);
                     } else {
-                        ui.label("Out");
+                        let resp = ui.label("Out");
+                        label_rect = Some(resp.rect);
                     }
                 });
             });
