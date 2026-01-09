@@ -32,7 +32,10 @@ pub struct EditorNode {
     pub num_somersloop_str: String,
     pub somersloop_mult: Option<crate::fractional_number::FractionalNumber>,
     pub somersloop_icon: Option<egui::TextureId>,
-}
+
+    // For group nodes: whether all contained craft nodes are built (None if not applicable)
+    pub group_built: Option<bool>,
+} 
 
 impl EditorNode {
     pub fn new(id: u64, label: impl Into<String>, node_type: impl Into<String>) -> Self {
@@ -56,6 +59,7 @@ impl EditorNode {
             num_somersloop_str: String::new(),
             somersloop_mult: None,
             somersloop_icon: None,
+            group_built: None,
         }
     }
 
@@ -92,6 +96,7 @@ impl EditorNode {
             num_somersloop_str: String::new(),
             somersloop_mult: None,
             somersloop_icon: None,
+            group_built: None,
         }
     }
 }
@@ -117,6 +122,9 @@ struct SnarlViewer {
     // Pending somersloop edits: node_id -> string
     pending_node_somersloop_edits: Vec<(u64, String)>,
 
+    // Pending group built edits: node_id -> bool
+    pending_node_built_edits: Vec<(u64, bool)>,
+
     // Whether to display same-clock or last-underclock in UI
     pub power_equal_clocks: bool,
 }
@@ -129,6 +137,11 @@ impl SnarlViewer {
     fn drain_pending_somersloop_edits(&mut self) -> Vec<(u64, String)> {
         std::mem::take(&mut self.pending_node_somersloop_edits)
     }
+
+    fn drain_pending_built_edits(&mut self) -> Vec<(u64, bool)> {
+        std::mem::take(&mut self.pending_node_built_edits)
+    }
+
 
     // Render a fractional number input similar to C++ RenderInputText.
     // Returns the response so caller can inspect focus/hover for tooltips.
@@ -168,6 +181,36 @@ impl SnarlViewer {
 impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
     fn title(&mut self, node: &EditorNode) -> String {
         node.label.clone()
+    }
+
+    fn show_header(
+        &mut self,
+        node_id: egui_snarl::NodeId,
+        _inputs: &[egui_snarl::InPin],
+        _outputs: &[egui_snarl::OutPin],
+        ui: &mut egui::Ui,
+        snarl: &mut egui_snarl::Snarl<EditorNode>,
+    ) {
+        // Default header shows title; override to add a checkbox for group nodes
+        if let Some(node_info) = snarl.get_node_info(node_id) {
+            // Access the EditorNode stored in the Snarl
+            let node = &node_info.value;
+            ui.horizontal(|ui| {
+                ui.label(node.label.clone());
+                // Right-aligned controls
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(is_built) = node.group_built {
+                        let mut checked = is_built;
+                        // Render compact checkbox without label
+                        let resp = ui.add(egui::widgets::Checkbox::new(&mut checked, ""));
+                        if resp.changed() {
+                            // Queue the change for processing after rendering
+                            self.pending_node_built_edits.push((node.id, checked));
+                        }
+                    }
+                });
+            });
+        }
     }
 
     fn inputs(&mut self, node: &EditorNode) -> usize {
@@ -713,6 +756,13 @@ impl TemplateApp {
         // Map special somersloop icon from cache (if present)
         editor_node.somersloop_icon = self.item_icon_cache.get("Somersloop").map(|h| h.id());
 
+        // If this is a group node, fetch build progress (built / total craft nodes) so UI can render a checkbox
+        if let Some((built_count, total_count)) = self.production_app.get_node_build_progress(node_id) {
+            if total_count > 0 {
+                editor_node.group_built = Some(built_count == total_count);
+            }
+        }
+
         editor_node
     }
 }
@@ -982,6 +1032,28 @@ impl TemplateApp {
                     Err(_) => {
                         self.error_message = "Invalid somersloop format".to_string();
                         self.error_time = 2.0;
+                    }
+                }
+            }
+
+            // Process pending group built edits collected by the SnarlViewer
+            for (node_id, built) in self.snarl_viewer.drain_pending_built_edits() {
+                match self.production_app.set_node_built_state(node_id, built) {
+                    Ok(()) => {
+                        // Update the snarl node data so the UI reflects the new state immediately
+                        if let Some((built_count, total_count)) = self.production_app.get_node_build_progress(node_id) {
+                            let new_state = if total_count > 0 { Some(built_count == total_count) } else { None };
+                            for node_info in self.snarl.nodes_info_mut() {
+                                if node_info.value.id == node_id {
+                                    node_info.value.group_built = new_state;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.error_message = format!("Error: {}", e);
+                        self.error_time = 3.0;
                     }
                 }
             }

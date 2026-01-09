@@ -270,6 +270,51 @@ impl ProductionApp {
         Err("Unsupported node kind for somersloop edit".into())
     }
 
+    /// Get build progress for a group node: (built_count, total_craft_nodes)
+    pub fn get_node_build_progress(&self, node_id: u64) -> Option<(usize, usize)> {
+        let start_idx = self.find_node_index(node_id)?;
+        // We will do a simple DFS over group children to count craft nodes and how many are built
+        let mut stack = vec![node_id];
+        let mut built = 0usize;
+        let mut total = 0usize;
+        while let Some(curr_id) = stack.pop() {
+            if let Some(idx) = self.find_node_index(curr_id) {
+                let node_any = &self.nodes[idx];
+                if let Some(craft) = node_any.downcast_ref::<CraftNode>() {
+                    total += 1;
+                    if craft.built {
+                        built += 1;
+                    }
+                } else if let Some(group) = node_any.downcast_ref::<GroupNode>() {
+                    for child in &group.nodes {
+                        stack.push(*child);
+                    }
+                }
+            }
+        }
+        Some((built, total))
+    }
+
+    /// Set the built state for a node (craft or group). For groups this will propagate to contained craft nodes.
+    pub fn set_node_built_state(&mut self, node_id: u64, built: bool) -> Result<(), String> {
+        let idx = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        let node_any = &mut self.nodes[idx];
+        if let Some(craft) = node_any.downcast_mut::<CraftNode>() {
+            craft.built = built;
+            return Ok(());
+        }
+        if let Some(group) = node_any.downcast_mut::<GroupNode>() {
+            // Propagate to all contained nodes (recursive)
+            let children = group.nodes.clone();
+            for child_id in children {
+                // ignore errors for missing children
+                let _ = self.set_node_built_state(child_id, built);
+            }
+            return Ok(());
+        }
+        Err("Unsupported node kind for set built state".into())
+    }
+
     /// Apply a new rate typed by the user into a pin. Performs simple validation
     /// and, for some node kinds (e.g., Craft), derives and applies a new node rate.
     pub fn set_pin_rate(&mut self, node_id: u64, direction: PinDirection, pin_index: usize, new_rate: FractionalNumber) -> Result<(), String> {
