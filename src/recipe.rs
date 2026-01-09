@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 pub struct Item {
     pub name: String,
     pub new_line_name: String, // Name with spaces replaced by newlines for display
-    pub icon_path: String, // Relative path (from assets/icons) or filename
+    pub icon_path: String,     // Relative path (from assets/icons) or filename
     pub icon_texture_id: Option<egui::TextureId>, // Will be loaded from image file
-    pub sink_value: i32, // Points when sent to AWESOME Sink
+    pub sink_value: i32,       // Points when sent to AWESOME Sink
 }
 
 impl Item {
@@ -56,7 +56,7 @@ pub struct Recipe {
     pub ins: Vec<CountedItem>,
     pub outs: Vec<CountedItem>,
     pub building: Option<std::rc::Rc<crate::building::Building>>, // Will be filled after loading
-    pub building_name: String, // For serialization
+    pub building_name: String,                                    // For serialization
     pub alternate: bool,
     pub is_spoiler: bool,
     pub power: f64, // Power consumption/generation

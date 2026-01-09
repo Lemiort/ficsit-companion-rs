@@ -1,7 +1,7 @@
 use num_rational::Rational64;
 use num_traits::{Signed, Zero};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::ser::SerializeTupleStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 
@@ -28,11 +28,7 @@ impl<'de> Deserialize<'de> for FractionalNumber {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_tuple_struct(
-            "FractionalNumber",
-            2,
-            FractionalNumberVisitor,
-        )
+        deserializer.deserialize_tuple_struct("FractionalNumber", 2, FractionalNumberVisitor)
     }
 }
 
@@ -140,7 +136,11 @@ impl FractionalNumber {
         let mut values: Vec<FractionalNumber> = Vec::new();
 
         for token in postfix {
-            if token.chars().next().map_or(false, |c| c.is_numeric() || c == '.') {
+            if token
+                .chars()
+                .next()
+                .map_or(false, |c| c.is_numeric() || c == '.')
+            {
                 // Parse number
                 if let Some(slash_pos) = token.find('/') {
                     // It's a fraction
@@ -160,9 +160,9 @@ impl FractionalNumber {
                             .parse::<i64>()
                             .map_err(|_| format!("Invalid integer part: {}", &token[..dot_pos]))?
                     };
-                    let frac_part = token[dot_pos + 1..]
-                        .parse::<i64>()
-                        .map_err(|_| format!("Invalid fractional part: {}", &token[dot_pos + 1..]))?;
+                    let frac_part = token[dot_pos + 1..].parse::<i64>().map_err(|_| {
+                        format!("Invalid fractional part: {}", &token[dot_pos + 1..])
+                    })?;
                     let decimals = (token.len() - dot_pos - 1) as u32;
                     let denominator = 10_i64.pow(decimals);
                     let numerator = int_part * denominator + frac_part;
@@ -340,7 +340,7 @@ mod tests {
     fn test_arithmetic() {
         let a = FractionalNumber::new(1, 2);
         let b = FractionalNumber::new(1, 3);
-        
+
         let sum = a + b;
         assert_eq!(sum.numerator(), 5);
         assert_eq!(sum.denominator(), 6);

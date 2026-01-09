@@ -130,46 +130,57 @@ fn smoke_test_game_data_parser() {
 
     let mut game_data = GameData::new();
     let result = game_data.load_from_json(json_data);
-    
-    assert!(result.is_ok(), "Failed to parse game data: {:?}", result.err());
-    
+
+    assert!(
+        result.is_ok(),
+        "Failed to parse game data: {:?}",
+        result.err()
+    );
+
     // Verify version
     assert_eq!(game_data.version(), "1.0");
-    
+
     // Verify items were loaded
     assert_eq!(game_data.items().len(), 6, "Expected 6 items");
     assert!(game_data.items().contains_key("Packaged Liquid Biofuel"));
     assert!(game_data.items().contains_key("Alien Power Matrix"));
-    
+
     let biofuel = game_data.items().get("Packaged Liquid Biofuel").unwrap();
     assert_eq!(biofuel.name, "Packaged Liquid Biofuel");
     assert_eq!(biofuel.sink_value, 370);
-    
+
     // Verify buildings were loaded
     assert_eq!(game_data.buildings().len(), 4, "Expected 4 buildings");
     assert!(game_data.buildings().contains_key("Coal-Powered Generator"));
     assert!(game_data.buildings().contains_key("Fuel-Powered Generator"));
     assert!(game_data.buildings().contains_key("Constructor"));
     assert!(game_data.buildings().contains_key("Smelter"));
-    
+
     let coal_gen = game_data.buildings().get("Coal-Powered Generator").unwrap();
     assert_eq!(coal_gen.name, "Coal-Powered Generator");
     assert_eq!(coal_gen.power, -75.0);
     assert_eq!(coal_gen.variable_power, false);
-    
+
     // Verify recipes were loaded
     assert_eq!(game_data.recipes().len(), 3, "Expected 3 recipes");
-    
-    let iron_plate_recipe = game_data.recipes()
+
+    let iron_plate_recipe = game_data
+        .recipes()
         .iter()
         .find(|r| r.name == "Iron Plate")
         .expect("Iron Plate recipe not found");
-    
+
     assert_eq!(iron_plate_recipe.name, "Iron Plate");
     assert_eq!(iron_plate_recipe.building_name, "Constructor");
     assert_eq!(iron_plate_recipe.alternate, false);
     assert_eq!(iron_plate_recipe.ins.len(), 1);
     assert_eq!(iron_plate_recipe.outs.len(), 1);
-    assert_eq!(iron_plate_recipe.ins[0].item.as_ref().unwrap().name, "Iron Ingot");
-    assert_eq!(iron_plate_recipe.outs[0].item.as_ref().unwrap().name, "Iron Plate");
+    assert_eq!(
+        iron_plate_recipe.ins[0].item.as_ref().unwrap().name,
+        "Iron Ingot"
+    );
+    assert_eq!(
+        iron_plate_recipe.outs[0].item.as_ref().unwrap().name,
+        "Iron Plate"
+    );
 }

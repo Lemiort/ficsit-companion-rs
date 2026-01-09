@@ -1,17 +1,17 @@
 #![warn(clippy::all, rust_2018_idioms)]
 
 mod app;
-mod fractional_number;
 pub mod building;
-pub mod recipe;
-pub mod pin;
+mod fractional_number;
+pub mod game_data;
 pub mod link;
 pub mod node;
-pub mod game_data;
-pub mod utils;
-pub mod rate_calculator;
+pub mod pin;
 pub mod production_app;
+pub mod rate_calculator;
+pub mod recipe;
 pub mod serialization;
+pub mod utils;
 
 pub use app::TemplateApp;
 pub use fractional_number::FractionalNumber;

@@ -9,7 +9,6 @@
 /// 2. Build a system of linear equations based on node constraints
 /// 3. Solve the system using Gaussian elimination
 /// 4. Apply the solution and update all rates
-
 use crate::fractional_number::FractionalNumber;
 use std::collections::HashMap;
 
@@ -56,7 +55,10 @@ pub struct LinearSolver {
 
 impl LinearSolver {
     /// Create a new solver with given coefficients and constants
-    pub fn new(coefficients: Vec<Vec<FractionalNumber>>, constants: Vec<FractionalNumber>) -> RateResult<Self> {
+    pub fn new(
+        coefficients: Vec<Vec<FractionalNumber>>,
+        constants: Vec<FractionalNumber>,
+    ) -> RateResult<Self> {
         if coefficients.is_empty() {
             return Err(RateError::NoSolution);
         }
@@ -129,8 +131,8 @@ impl LinearSolver {
                 self.matrix[i][k] = FractionalNumber::new(0, 1);
 
                 for j in (k + 1)..=num_variables {
-                    self.matrix[i][j] = self.matrix[i][j].clone()
-                        - self.matrix[h][j].clone() * factor.clone();
+                    self.matrix[i][j] =
+                        self.matrix[i][j].clone() - self.matrix[h][j].clone() * factor.clone();
                 }
             }
 
@@ -171,8 +173,8 @@ impl LinearSolver {
                 sum = sum + self.matrix[i][j].clone() * solution[j].clone();
             }
 
-            solution[pivot_col] = (self.matrix[i][num_variables].clone() - sum)
-                / self.matrix[i][pivot_col].clone();
+            solution[pivot_col] =
+                (self.matrix[i][num_variables].clone() - sum) / self.matrix[i][pivot_col].clone();
         }
 
         // Verify all solutions are non-negative
@@ -209,7 +211,11 @@ pub fn build_equations(
     constraints: Vec<PinConstraint>,
     locked_pin_rates: HashMap<u64, FractionalNumber>,
     links: Vec<(u64, u64)>, // (output_pin, input_pin) connections
-) -> RateResult<(Vec<Vec<FractionalNumber>>, Vec<FractionalNumber>, VariableMapping)> {
+) -> RateResult<(
+    Vec<Vec<FractionalNumber>>,
+    Vec<FractionalNumber>,
+    VariableMapping,
+)> {
     if constraints.is_empty() {
         return Err(RateError::NoSolution);
     }
@@ -222,9 +228,10 @@ pub fn build_equations(
     // Create variables for unlocked pins
     for constraint in &constraints {
         if !constraint.is_locked {
-            mapping
-                .pin_to_variable
-                .insert(constraint.pin_id, (mapping.num_variables, FractionalNumber::new(1, 1)));
+            mapping.pin_to_variable.insert(
+                constraint.pin_id,
+                (mapping.num_variables, FractionalNumber::new(1, 1)),
+            );
             mapping.num_variables += 1;
         }
     }
@@ -420,12 +427,36 @@ mod tests {
         // v20 - v10 = 0
         // v11 - v10 + v12 = 0
         let coeffs = vec![
-            vec![FractionalNumber::new(1,1), FractionalNumber::new(0,1), FractionalNumber::new(0,1), FractionalNumber::new(0,1), FractionalNumber::new(0,1)],
-            vec![FractionalNumber::new(1,1), FractionalNumber::new(-1,1), FractionalNumber::new(0,1), FractionalNumber::new(0,1), FractionalNumber::new(0,1)],
-            vec![FractionalNumber::new(0,1), FractionalNumber::new(0,1), FractionalNumber::new(1,1), FractionalNumber::new(-1,1), FractionalNumber::new(0,1)],
-            vec![FractionalNumber::new(1,1), FractionalNumber::new(0,1), FractionalNumber::new(0,1), FractionalNumber::new(-1,1), FractionalNumber::new(1,1)],
+            vec![
+                FractionalNumber::new(1, 1),
+                FractionalNumber::new(0, 1),
+                FractionalNumber::new(0, 1),
+                FractionalNumber::new(0, 1),
+                FractionalNumber::new(0, 1),
+            ],
+            vec![
+                FractionalNumber::new(1, 1),
+                FractionalNumber::new(-1, 1),
+                FractionalNumber::new(0, 1),
+                FractionalNumber::new(0, 1),
+                FractionalNumber::new(0, 1),
+            ],
+            vec![
+                FractionalNumber::new(0, 1),
+                FractionalNumber::new(0, 1),
+                FractionalNumber::new(1, 1),
+                FractionalNumber::new(-1, 1),
+                FractionalNumber::new(0, 1),
+            ],
+            vec![
+                FractionalNumber::new(1, 1),
+                FractionalNumber::new(0, 1),
+                FractionalNumber::new(0, 1),
+                FractionalNumber::new(-1, 1),
+                FractionalNumber::new(1, 1),
+            ],
         ];
-        let consts = vec![FractionalNumber::new(0,1); 4];
+        let consts = vec![FractionalNumber::new(0, 1); 4];
         let solver = LinearSolver::new(coeffs.clone(), consts.clone()).unwrap();
         let res = solver.solve();
         assert!(res.is_ok());

@@ -35,7 +35,11 @@ pub struct EditorNode {
 
     // For group nodes: whether all contained craft nodes are built (None if not applicable)
     pub group_built: Option<bool>,
-} 
+
+    // For sink nodes: total sink points expressed as decimal string, and fraction tooltip
+    pub sink_points_str: String,
+    pub sink_points_fraction_str: String,
+}
 
 impl EditorNode {
     pub fn new(id: u64, label: impl Into<String>, node_type: impl Into<String>) -> Self {
@@ -60,6 +64,8 @@ impl EditorNode {
             somersloop_mult: None,
             somersloop_icon: None,
             group_built: None,
+            sink_points_str: String::new(),
+            sink_points_fraction_str: String::new(),
         }
     }
 
@@ -97,12 +103,14 @@ impl EditorNode {
             somersloop_mult: None,
             somersloop_icon: None,
             group_built: None,
+            sink_points_str: String::new(),
+            sink_points_fraction_str: String::new(),
         }
     }
 }
 
-use std::collections::HashMap;
 use crate::pin::PinDirection;
+use std::collections::HashMap;
 
 #[derive(Default, Debug)]
 struct SnarlViewer {
@@ -142,28 +150,41 @@ impl SnarlViewer {
         std::mem::take(&mut self.pending_node_built_edits)
     }
 
-
     // Render a fractional number input similar to C++ RenderInputText.
     // Returns the response so caller can inspect focus/hover for tooltips.
-    fn render_fractional_input(&mut self, ui: &mut egui::Ui, key: &str, buf: &mut String, width: f32, disabled: bool) -> egui::Response {
+    fn render_fractional_input(
+        &mut self,
+        ui: &mut egui::Ui,
+        key: &str,
+        buf: &mut String,
+        width: f32,
+        disabled: bool,
+    ) -> egui::Response {
         // Ensure buffer exists in edit_buffers
-        self.edit_buffers.entry(key.to_owned()).or_insert_with(|| buf.clone());
+        self.edit_buffers
+            .entry(key.to_owned())
+            .or_insert_with(|| buf.clone());
         let buf_ref = self.edit_buffers.get_mut(key).unwrap();
 
         // Reserve a rectangle of exact size for the input
-        let (rect, _alloc_response) = ui.allocate_exact_size(egui::Vec2::new(width, ui.spacing().interact_size.y), egui::Sense::click());
+        let (rect, _alloc_response) = ui.allocate_exact_size(
+            egui::Vec2::new(width, ui.spacing().interact_size.y),
+            egui::Sense::click(),
+        );
 
         // Active input: render TextEdit inside the reserved rect
         let text_edit = egui::TextEdit::singleline(buf_ref).desired_width(width);
-        let response = ui.allocate_ui_at_rect(rect, |ui| {
-            ui.add_enabled(!disabled,
-                text_edit
-            )
-        }).response;
+        let response = ui
+            .allocate_ui_at_rect(rect, |ui| ui.add_enabled(!disabled, text_edit))
+            .response;
 
         // Focus highlight (blue)
         if response.has_focus() || response.gained_focus() {
-            ui.painter().rect_filled(rect.expand(2.0), 4.0, egui::Color32::from_rgba_unmultiplied(30, 70, 120, 60));
+            ui.painter().rect_filled(
+                rect.expand(2.0),
+                4.0,
+                egui::Color32::from_rgba_unmultiplied(30, 70, 120, 60),
+            );
         }
 
         // Tooltip showing parsed fraction and decimal value
@@ -246,10 +267,16 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                     let desired_width = 88.0;
                     let mut tmp = rate.clone();
                     let disabled = node.input_locked.get(idx).copied().unwrap_or(false);
-                    let response = self.render_fractional_input(ui, &key, &mut tmp, desired_width, disabled);
+                    let response =
+                        self.render_fractional_input(ui, &key, &mut tmp, desired_width, disabled);
                     if response.lost_focus() && response.changed() {
                         if let Some(buf) = self.edit_buffers.get(&key) {
-                            self.pending_pin_rate_edits.push((node.id, PinDirection::Input, idx, buf.clone()));
+                            self.pending_pin_rate_edits.push((
+                                node.id,
+                                PinDirection::Input,
+                                idx,
+                                buf.clone(),
+                            ));
                         }
                     }
                 }
@@ -298,14 +325,19 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                 .unwrap_or("Out");
             let label_width = ui
                 .painter()
-                .layout_no_wrap(label_text.to_owned(), egui::FontId::default(), egui::Color32::WHITE)
+                .layout_no_wrap(
+                    label_text.to_owned(),
+                    egui::FontId::default(),
+                    egui::Color32::WHITE,
+                )
                 .size()
                 .x;
             let gap = 6.0;
             let row_width = 88.0 + gap + size.x + gap + label_width;
 
             // Advance layout but render into an anchored rect so rows don't drift
-            let (slot_rect, _slot_resp) = ui.allocate_exact_size(egui::vec2(row_width, size.y), egui::Sense::hover());
+            let (slot_rect, _slot_resp) =
+                ui.allocate_exact_size(egui::vec2(row_width, size.y), egui::Sense::hover());
             let anchor_right = *self.output_anchor_right.get_or_insert(slot_rect.right());
             let anchored_rect = egui::Rect::from_min_max(
                 egui::pos2(anchor_right - row_width, slot_rect.top()),
@@ -321,11 +353,22 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                         let desired_width = 88.0;
                         let mut tmp = rate.clone();
                         let disabled = node.output_locked.get(idx).copied().unwrap_or(false);
-                        let response = self.render_fractional_input(ui, &key, &mut tmp, desired_width, disabled);
+                        let response = self.render_fractional_input(
+                            ui,
+                            &key,
+                            &mut tmp,
+                            desired_width,
+                            disabled,
+                        );
                         rate_rect = Some(response.rect);
                         if response.lost_focus() && response.changed() {
                             if let Some(buf) = self.edit_buffers.get(&key) {
-                                self.pending_pin_rate_edits.push((node.id, PinDirection::Output, idx, buf.clone()));
+                                self.pending_pin_rate_edits.push((
+                                    node.id,
+                                    PinDirection::Output,
+                                    idx,
+                                    buf.clone(),
+                                ));
                             }
                         }
                     }
@@ -354,10 +397,11 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
     }
 
     fn has_footer(&mut self, node: &EditorNode) -> bool {
-        // Show footer if node has building or power info (craft nodes)
+        // Show footer if node has building, power info (craft nodes) or sink points
         !node.building_name.is_empty()
             || !node.same_clock_power_str.is_empty()
             || !node.last_underclock_power_str.is_empty()
+            || !node.sink_points_str.is_empty()
     }
 
     fn show_footer(
@@ -372,98 +416,181 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             let node = node_ref.clone();
             ui.vertical(|ui| {
                 // Power + building row matching C++ node bottom: single power input (choice depends on power mode), MW suffix, then pushed node rate + building
-                let power_value = if self.power_equal_clocks { node.same_clock_power_str.clone() } else { node.last_underclock_power_str.clone() };
-                if !power_value.is_empty() || !node.building_name.is_empty() {
+                let power_value = if self.power_equal_clocks {
+                    node.same_clock_power_str.clone()
+                } else {
+                    node.last_underclock_power_str.clone()
+                };
+                if !power_value.is_empty() || !node.building_name.is_empty(){
                     ui.horizontal(|ui| {
-
                         // Power sizes (number field + spacing + MW label)
-                        let power_field_width = ui.painter().layout_no_wrap("000000.00".to_owned(), egui::FontId::default(), egui::Color32::WHITE).size().x + 8.0;
+                        let power_field_width = ui
+                            .painter()
+                            .layout_no_wrap(
+                                "000000.00".to_owned(),
+                                egui::FontId::default(),
+                                egui::Color32::WHITE,
+                            )
+                            .size()
+                            .x;
                         let power_label_text = if node.variable_power { "~MW" } else { "MW" };
 
                         // Building sizes (count field + spacing + label)
-                        let center_field_width = ui.spacing().interact_size.y * 2.0;
+                        let center_field_width = ui.spacing().interact_size.y;
 
                         egui::Grid::new(format!("footer_grid:{}", node.id))
                             .num_columns(3)
                             .spacing([8.0, 8.0])
                             .min_col_width(ui.available_width() / 3.0)
                             .show(ui, |ui| {
-                                     if !power_value.is_empty() {
-                                        ui.horizontal(|ui| {
-                                            let key = format!("node:{}:power", node.id);
-                                            let mut tmp = power_value.clone();
-                                            let locked = true; // Power is always locked in this UI
-                                            let input_resp = self.render_fractional_input(ui, &key, &mut tmp, power_field_width, locked);
-                                            // Render combined label ("~MW" when variable) similar to C++
-                                            let label_resp = ui.label(power_label_text);
-                                            if node.variable_power && (label_resp.hovered() || input_resp.hovered()) {
-                                                label_resp.on_hover_text("Average power");
-                                            }
-                                        });
-                                    } else {
-                                        ui.horizontal(|ui| {});
-                                    }
+                                if !power_value.is_empty() {
+                                    ui.horizontal(|ui| {
+                                        let key = format!("node:{}:power", node.id);
+                                        let mut tmp = power_value.clone();
+                                        let locked = true; // Power is always locked in this UI
+                                        let input_resp = self.render_fractional_input(
+                                            ui,
+                                            &key,
+                                            &mut tmp,
+                                            power_field_width,
+                                            locked,
+                                        );
+                                        // Render combined label ("~MW" when variable) similar to C++
+                                        let label_resp = ui.label(power_label_text);
+                                        if node.variable_power
+                                            && (label_resp.hovered() || input_resp.hovered())
+                                        {
+                                            label_resp.on_hover_text("Average power");
+                                        }
+                                    });
+                                } else {
+                                    ui.horizontal(|ui| {});
+                                }
 
-                                     // Column 2: building (center column occupies the center of the footer), content left-to-right
-                                    if !node.building_name.is_empty() {
-                                        ui.horizontal(|ui| {
-                                            if !node.building_count_str.is_empty() {
-                                                let key = format!("building:{}", node.id);
-                                                let mut tmp = node.building_count_str.clone();
-                                                let _r = self.render_fractional_input(ui, &key, &mut tmp, center_field_width, false);
-                                            }
-                                            if !node.building_name.is_empty() {
-                                                ui.label(&node.building_name);
-                                            }
-                                        });
-                                    } else {
-                                        ui.horizontal(|ui| {});
-                                    }
-
-                                    // Somersloop field (show only if building supports it and not a power generator)
-                                    if !node.num_somersloop_str.is_empty() || node.somersloop_mult.map_or(false, |m| m.numerator() != 0) {
-                                        if node.somersloop_mult.map_or(false, |m| m.numerator() != 0) && !node.last_underclock_power_str.starts_with("-") {
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui|{
-                                                    ui.horizontal(|ui| {
-                                                        if let Some(tex) = node.somersloop_icon {
-                                                            // Use the standard interact height from the UI spacing for the icon size.
-                                                            let icon_size = egui::vec2(ui.spacing().interact_size.y, ui.spacing().interact_size.y);
-                                                            let (rect, resp) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
-                                                            ui.painter().image(tex, rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-                                                            if resp.hovered() {
-                                                                resp.on_hover_text("Alien Production Amplification");
-                                                            }
-                                                        }
-
-                                                        let somersloop_width = ui.painter().layout_no_wrap("4".to_owned(), egui::FontId::default(), egui::Color32::WHITE).size().x + 8.0;
-                                                        let key = format!("node:{}:somersloop", node.id);
-                                                        let mut tmp = node.num_somersloop_str.clone();
-                                                        let is_locked = node.input_locked.get(0).copied().unwrap_or(false) || node.output_locked.get(0).copied().unwrap_or(false);
-                                                        let resp = self.render_fractional_input(ui, &key, &mut tmp, somersloop_width, is_locked);
-
-                                                        if resp.lost_focus() && resp.changed() {
-                                                            // Commit somersloop edit from the internal buffer (render_fractional_input stores it)
-                                                            if let Some(buf) = self.edit_buffers.get(&key) {
-                                                                self.pending_node_somersloop_edits.push((node.id, buf.clone()));
-                                                            }
-                                                        }
-                                                    });
-                                                }
+                                // Column 2: building (center column occupies the center of the footer), content left-to-right
+                                if !node.building_name.is_empty() {
+                                    ui.horizontal(|ui| {
+                                        if !node.building_count_str.is_empty() {
+                                            let key = format!("building:{}", node.id);
+                                            let mut tmp = node.building_count_str.clone();
+                                            let _r = self.render_fractional_input(
+                                                ui,
+                                                &key,
+                                                &mut tmp,
+                                                center_field_width,
+                                                false,
                                             );
                                         }
-                                    }
-                                    else{
-                                        // 3rd column reserved
-                                        ui.horizontal(|ui| {});
-                                    }
-                                    ui.end_row();
-                            });
+                                        if !node.building_name.is_empty() {
+                                            ui.label(&node.building_name);
+                                        }
+                                    });
+                                } else {
+                                    ui.horizontal(|ui| {});
+                                }
 
+                                // Somersloop field (show only if building supports it and not a power generator)
+                                if !node.num_somersloop_str.is_empty()
+                                    || node.somersloop_mult.map_or(false, |m| m.numerator() != 0)
+                                {
+                                    if node.somersloop_mult.map_or(false, |m| m.numerator() != 0)
+                                        && !node.last_underclock_power_str.starts_with("-")
+                                    {
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.horizontal(|ui| {
+                                                    if let Some(tex) = node.somersloop_icon {
+                                                        // Use the standard interact height from the UI spacing for the icon size.
+                                                        let icon_size = egui::vec2(
+                                                            ui.spacing().interact_size.y,
+                                                            ui.spacing().interact_size.y,
+                                                        );
+                                                        let (rect, resp) = ui.allocate_exact_size(
+                                                            icon_size,
+                                                            egui::Sense::hover(),
+                                                        );
+                                                        ui.painter().image(
+                                                            tex,
+                                                            rect,
+                                                            egui::Rect::from_min_max(
+                                                                egui::pos2(0.0, 0.0),
+                                                                egui::pos2(1.0, 1.0),
+                                                            ),
+                                                            egui::Color32::WHITE,
+                                                        );
+                                                        if resp.hovered() {
+                                                            resp.on_hover_text(
+                                                                "Alien Production Amplification",
+                                                            );
+                                                        }
+                                                    }
+
+                                                    let somersloop_width = ui
+                                                        .painter()
+                                                        .layout_no_wrap(
+                                                            "4".to_owned(),
+                                                            egui::FontId::default(),
+                                                            egui::Color32::WHITE,
+                                                        )
+                                                        .size()
+                                                        .x
+                                                        + 8.0;
+                                                    let key =
+                                                        format!("node:{}:somersloop", node.id);
+                                                    let mut tmp = node.num_somersloop_str.clone();
+                                                    let is_locked = node
+                                                        .input_locked
+                                                        .get(0)
+                                                        .copied()
+                                                        .unwrap_or(false)
+                                                        || node
+                                                            .output_locked
+                                                            .get(0)
+                                                            .copied()
+                                                            .unwrap_or(false);
+                                                    let resp = self.render_fractional_input(
+                                                        ui,
+                                                        &key,
+                                                        &mut tmp,
+                                                        somersloop_width,
+                                                        is_locked,
+                                                    );
+
+                                                    if resp.lost_focus() && resp.changed() {
+                                                        // Commit somersloop edit from the internal buffer (render_fractional_input stores it)
+                                                        if let Some(buf) =
+                                                            self.edit_buffers.get(&key)
+                                                        {
+                                                            self.pending_node_somersloop_edits
+                                                                .push((node.id, buf.clone()));
+                                                        }
+                                                    }
+                                                });
+                                            },
+                                        );
+                                    }
+                                } else {
+                                    // 3rd column reserved
+                                    ui.horizontal(|ui| {});
+                                }
+                                ui.end_row();
+                            });
                     });
                 }
-
+                else if !node.sink_points_str.is_empty(){
+                    // Sink node: show points and tooltip with fraction
+                    ui.horizontal(|ui| {
+                        let mut points_str = node.sink_points_str.clone();
+                        // magic number
+                        let text_edit = egui::TextEdit::singleline(&mut points_str).desired_width(44.0);
+                        let response = ui.add_enabled(false, text_edit);
+                        if response.hovered() {
+                            response.on_hover_text(&node.sink_points_fraction_str);
+                        }
+                        ui.label("points");
+                    });
+                }
             });
         }
     }
@@ -534,14 +661,17 @@ pub struct TemplateApp {
 impl Default for TemplateApp {
     fn default() -> Self {
         let mut game_data = crate::game_data::GameData::new();
-        
+
         // Load game data from satisfactory.json
         #[cfg(not(target_arch = "wasm32"))]
         {
             if let Ok(json_data) = std::fs::read_to_string("assets/satisfactory.json") {
                 match game_data.load_from_json(&json_data) {
                     Ok(_) => {
-                        println!("✓ Loaded {} recipes from game data", game_data.recipes.len());
+                        println!(
+                            "✓ Loaded {} recipes from game data",
+                            game_data.recipes.len()
+                        );
                     }
                     Err(e) => {
                         eprintln!("✗ Failed to load game data: {}", e);
@@ -551,16 +681,16 @@ impl Default for TemplateApp {
                 eprintln!("✗ Warning: Could not read assets/satisfactory.json");
             }
         }
-        
+
         #[cfg(target_arch = "wasm32")]
         {
             // For web, we'll need to load this differently (fetch API, etc.)
             eprintln!("Web platform: game data loading not yet implemented");
         }
-        
+
         let mut snarl_style = egui_snarl::ui::SnarlStyle::new();
         snarl_style.collapsible = Some(false);
-        
+
         let mut app = Self {
             production_app: ProductionApp::new(),
             game_data,
@@ -619,10 +749,10 @@ impl TemplateApp {
     fn load_item_textures(&mut self, cc: &eframe::CreationContext<'_>) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use image::ImageReader as ImageReader;
             use egui::ColorImage;
+            use image::ImageReader;
 
-                // Try loading a special somersloop icon used in node footers (optional)
+            // Try loading a special somersloop icon used in node footers (optional)
             let somersloop_path = "assets/icons/Wat_1_64.png";
             if !self.item_icon_cache.contains_key("Somersloop") {
                 match ImageReader::open(somersloop_path) {
@@ -632,11 +762,19 @@ impl TemplateApp {
                             let size = [img.width() as usize, img.height() as usize];
                             let pixels = img.into_raw();
                             let color_image = ColorImage::from_rgba_unmultiplied(size, &pixels);
-                            let texture = cc.egui_ctx.load_texture("Somersloop".to_owned(), color_image, egui::TextureOptions::default());
-                            self.item_icon_cache.insert("Somersloop".to_owned(), texture);
+                            let texture = cc.egui_ctx.load_texture(
+                                "Somersloop".to_owned(),
+                                color_image,
+                                egui::TextureOptions::default(),
+                            );
+                            self.item_icon_cache
+                                .insert("Somersloop".to_owned(), texture);
                         }
                         Err(e) => {
-                            eprintln!("Failed to decode somersloop icon {}: {}", somersloop_path, e);
+                            eprintln!(
+                                "Failed to decode somersloop icon {}: {}",
+                                somersloop_path, e
+                            );
                         }
                     },
                     Err(_) => {
@@ -662,7 +800,11 @@ impl TemplateApp {
                             let size = [img.width() as usize, img.height() as usize];
                             let pixels = img.into_raw();
                             let color_image = ColorImage::from_rgba_unmultiplied(size, &pixels);
-                            let texture = cc.egui_ctx.load_texture(name.clone(), color_image, egui::TextureOptions::default());
+                            let texture = cc.egui_ctx.load_texture(
+                                name.clone(),
+                                color_image,
+                                egui::TextureOptions::default(),
+                            );
                             // Keep the returned TextureHandle alive in the cache
                             self.item_icon_cache.insert(name.clone(), texture);
                         }
@@ -675,7 +817,10 @@ impl TemplateApp {
                     }
                 }
             }
-            println!("Loaded {} item icons into cache", self.item_icon_cache.len());
+            println!(
+                "Loaded {} item icons into cache",
+                self.item_icon_cache.len()
+            );
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -686,7 +831,12 @@ impl TemplateApp {
     }
 
     /// Build an EditorNode from production model (fill pin names and icons)
-    fn build_editor_node(&self, node_id: u64, label: impl Into<String>, node_type: impl Into<String>) -> EditorNode {
+    fn build_editor_node(
+        &self,
+        node_id: u64,
+        label: impl Into<String>,
+        node_type: impl Into<String>,
+    ) -> EditorNode {
         let (input_names, output_names) = self
             .production_app
             .get_node_pin_item_names(node_id)
@@ -699,16 +849,24 @@ impl TemplateApp {
             .unwrap_or((Vec::new(), Vec::new()));
 
         // Map icons
-        // (no debug prints) 
+        // (no debug prints)
 
         let input_icons: Vec<Option<egui::TextureId>> = input_names
             .iter()
-            .map(|opt_name| opt_name.as_ref().and_then(|n| self.item_icon_cache.get(n).map(|h| h.id())))
+            .map(|opt_name| {
+                opt_name
+                    .as_ref()
+                    .and_then(|n| self.item_icon_cache.get(n).map(|h| h.id()))
+            })
             .collect();
 
         let output_icons: Vec<Option<egui::TextureId>> = output_names
             .iter()
-            .map(|opt_name| opt_name.as_ref().and_then(|n| self.item_icon_cache.get(n).map(|h| h.id())))
+            .map(|opt_name| {
+                opt_name
+                    .as_ref()
+                    .and_then(|n| self.item_icon_cache.get(n).map(|h| h.id()))
+            })
             .collect();
 
         // Fetch rates from production model so UI can display them
@@ -730,7 +888,10 @@ impl TemplateApp {
             .unwrap_or((String::new(), String::new(), false));
 
         // Fetch somersloop info from production model (num and multiplier if available)
-        let (num_somersloop_str, somersloop_mult) = self.production_app.get_node_somersloop_info(node_id).unwrap_or((String::new(), None));
+        let (num_somersloop_str, somersloop_mult) = self
+            .production_app
+            .get_node_somersloop_info(node_id)
+            .unwrap_or((String::new(), None));
 
         let mut editor_node = EditorNode::with_pins(
             node_id,
@@ -757,10 +918,36 @@ impl TemplateApp {
         editor_node.somersloop_icon = self.item_icon_cache.get("Somersloop").map(|h| h.id());
 
         // If this is a group node, fetch build progress (built / total craft nodes) so UI can render a checkbox
-        if let Some((built_count, total_count)) = self.production_app.get_node_build_progress(node_id) {
+        if let Some((built_count, total_count)) =
+            self.production_app.get_node_build_progress(node_id)
+        {
             if total_count > 0 {
                 editor_node.group_built = Some(built_count == total_count);
             }
+        }
+
+        // If this is a sink node, compute sink points (sum of input rates * item sink value) and store for footer display
+        if editor_node.node_type == "sink" {
+            let mut sum = crate::fractional_number::FractionalNumber::default();
+            for (opt_name, opt_rate) in editor_node
+                .input_names
+                .iter()
+                .zip(editor_node.input_rates.iter())
+            {
+                if let (Some(name), Some(rate_str)) = (opt_name.as_ref(), opt_rate.as_ref()) {
+                    if let Ok(r) = crate::fractional_number::FractionalNumber::from_string(rate_str)
+                    {
+                        if let Some(item_rc) = self.game_data.items.get(name) {
+                            let pts = r * crate::fractional_number::FractionalNumber::from(
+                                item_rc.sink_value as i64,
+                            );
+                            sum += pts;
+                        }
+                    }
+                }
+            }
+            editor_node.sink_points_str = sum.to_float_string();
+            editor_node.sink_points_fraction_str = sum.to_fraction_string();
         }
 
         editor_node
@@ -787,91 +974,97 @@ impl eframe::App for TemplateApp {
 
 impl TemplateApp {
     fn show_top_panel(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("top_panel")
-            .show(ctx, |ui| {
-                egui::MenuBar::new().ui(ui, |ui| {
-                    let is_web = cfg!(target_arch = "wasm32");
+        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                let is_web = cfg!(target_arch = "wasm32");
 
-                    if !is_web {
-                        ui.menu_button("File", |ui| {
-                            if ui.button("📄 New").clicked() {
-                                self.production_app = ProductionApp::new();
-                                self.snarl = egui_snarl::Snarl::new();
-                                ui.close();
-                            }
-
-                            if ui.button("📂 Open...").clicked() {
-                                // TODO: Implement file open dialog
-                                ui.close();
-                            }
-
-                            if ui.button("💾 Save...").clicked() {
-                                // TODO: Implement file save dialog
-                                ui.close();
-                            }
-
-                            ui.separator();
-
-                            if ui.button("❌ Quit").clicked() {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            }
-                        });
-                    }
-
-                    ui.menu_button("Add Node", |ui| {
-                        if ui.button("⚙️ Craft Node...").clicked() {
-                            self.show_recipe_selector = true;
+                if !is_web {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("📄 New").clicked() {
+                            self.production_app = ProductionApp::new();
+                            self.snarl = egui_snarl::Snarl::new();
                             ui.close();
                         }
-                        if ui.button("🔀 Splitter").clicked() {
-                            let node_id = self.production_app.add_custom_splitter_node();
-                            let en = self.build_editor_node(node_id, "Splitter*", "custom_splitter");
-                            self.snarl.insert_node(egui::pos2(300.0, 300.0), en);
-                            self.error_message = "Created Custom Splitter".to_string();
-                            self.error_time = 2.0;
+
+                        if ui.button("📂 Open...").clicked() {
+                            // TODO: Implement file open dialog
                             ui.close();
                         }
-                        if ui.button("🔁 Merger").clicked() {
-                            let node_id = self.production_app.add_merger_node();
-                            let en = self.build_editor_node(node_id, "Merger", "merger");
-                            self.snarl.insert_node(egui::pos2(300.0, 300.0), en);
-                            self.error_message = "Created Merger".to_string();
-                            self.error_time = 2.0;
+
+                        if ui.button("💾 Save...").clicked() {
+                            // TODO: Implement file save dialog
                             ui.close();
                         }
-                        if ui.button("📦 Sink").clicked() {
-                            let node_id = self.production_app.add_sink_node();
-                            let en = self.build_editor_node(node_id, "Sink", "sink");
-                            self.snarl.insert_node(egui::pos2(300.0, 300.0), en);
-                            self.error_message = "Created Sink".to_string();
-                            self.error_time = 2.0;
-                            self.show_controls_popup = true;
-                            ui.close();
-                        }
+
                         ui.separator();
-                        if ui.button("🎨 Theme").clicked() {
-                            ui.close();
+
+                        if ui.button("❌ Quit").clicked() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                     });
+                }
 
-                    ui.add_space(16.0);
-                    egui::widgets::global_theme_preference_buttons(ui);
+                ui.menu_button("Add Node", |ui| {
+                    if ui.button("⚙️ Craft Node...").clicked() {
+                        self.show_recipe_selector = true;
+                        ui.close();
+                    }
+                    if ui.button("🔀 Splitter").clicked() {
+                        let node_id = self.production_app.add_custom_splitter_node();
+                        let en = self.build_editor_node(node_id, "Splitter*", "custom_splitter");
+                        self.snarl.insert_node(egui::pos2(300.0, 300.0), en);
+                        self.error_message = "Created Custom Splitter".to_string();
+                        self.error_time = 2.0;
+                        ui.close();
+                    }
+                    if ui.button("🔁 Merger").clicked() {
+                        let node_id = self.production_app.add_merger_node();
+                        let en = self.build_editor_node(node_id, "Merger", "merger");
+                        self.snarl.insert_node(egui::pos2(300.0, 300.0), en);
+                        self.error_message = "Created Merger".to_string();
+                        self.error_time = 2.0;
+                        ui.close();
+                    }
+                    if ui.button("📦 Sink").clicked() {
+                        let node_id = self.production_app.add_sink_node();
+                        let en = self.build_editor_node(node_id, "Sink", "sink");
+                        self.snarl.insert_node(egui::pos2(300.0, 300.0), en);
+                        self.error_message = "Created Sink".to_string();
+                        self.error_time = 2.0;
+                        self.show_controls_popup = true;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("🎨 Theme").clicked() {
+                        ui.close();
+                    }
+                });
 
-                    // Debug: draw a few test item icons on the top bar to confirm texture painting
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        for name in ["Iron Ingot", "Iron Plate", "Rocket Fuel"].iter() {
-                            if let Some(handle) = self.item_icon_cache.get(*name) {
+                ui.add_space(16.0);
+                egui::widgets::global_theme_preference_buttons(ui);
 
-                                let size = egui::Vec2::splat(28.0);
-                                let (rect, _resp) = ui.allocate_exact_size(size, egui::Sense::hover());
-                                ui.painter().image(handle.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
-                            } else {
-                                ui.label(" ");
-                            }
+                // Debug: draw a few test item icons on the top bar to confirm texture painting
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    for name in ["Iron Ingot", "Iron Plate", "Rocket Fuel"].iter() {
+                        if let Some(handle) = self.item_icon_cache.get(*name) {
+                            let size = egui::Vec2::splat(28.0);
+                            let (rect, _resp) = ui.allocate_exact_size(size, egui::Sense::hover());
+                            ui.painter().image(
+                                handle.id(),
+                                rect,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                egui::Color32::WHITE,
+                            );
+                        } else {
+                            ui.label(" ");
                         }
-                    });
+                    }
                 });
             });
+        });
     }
 
     fn show_left_panel(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -976,9 +1169,13 @@ impl TemplateApp {
             // Show error message if present
             if !self.error_message.is_empty() && self.error_time > 0.0 {
                 ui.colored_label(
-                    if self.error_message.starts_with("error")  || self.error_message.starts_with("Error")
-                        { egui::Color32::RED }
-                    else { egui::Color32::GREEN },
+                    if self.error_message.starts_with("error")
+                        || self.error_message.starts_with("Error")
+                    {
+                        egui::Color32::RED
+                    } else {
+                        egui::Color32::GREEN
+                    },
                     &self.error_message,
                 );
                 ui.ctx().request_repaint();
@@ -1041,8 +1238,14 @@ impl TemplateApp {
                 match self.production_app.set_node_built_state(node_id, built) {
                     Ok(()) => {
                         // Update the snarl node data so the UI reflects the new state immediately
-                        if let Some((built_count, total_count)) = self.production_app.get_node_build_progress(node_id) {
-                            let new_state = if total_count > 0 { Some(built_count == total_count) } else { None };
+                        if let Some((built_count, total_count)) =
+                            self.production_app.get_node_build_progress(node_id)
+                        {
+                            let new_state = if total_count > 0 {
+                                Some(built_count == total_count)
+                            } else {
+                                None
+                            };
                             for node_info in self.snarl.nodes_info_mut() {
                                 if node_info.value.id == node_id {
                                     node_info.value.group_built = new_state;
@@ -1061,7 +1264,10 @@ impl TemplateApp {
             // Right-click context menu is handled in show_dialogs
             if snarl_response.secondary_clicked() {
                 self.show_add_node_popup = true;
-                self.add_node_popup_pos = ui.ctx().pointer_interact_pos().unwrap_or(egui::pos2(300.0, 300.0));
+                self.add_node_popup_pos = ui
+                    .ctx()
+                    .pointer_interact_pos()
+                    .unwrap_or(egui::pos2(300.0, 300.0));
             }
 
             ui.separator();
@@ -1082,7 +1288,7 @@ impl TemplateApp {
         // Add node context menu (right-click menu) - using Area for true context menu behavior
         if self.show_add_node_popup {
             let menu_id = egui::Id::new("add_node_context_menu");
-            
+
             // Use Area to position the menu at the right-click location
             let response = egui::Area::new(menu_id)
                 .fixed_pos(self.add_node_popup_pos)
@@ -1299,7 +1505,7 @@ impl TemplateApp {
                             }
                         });
                 });
-            
+
             // Close menu if clicked outside of it
             if ctx.input(|i| i.pointer.primary_clicked()) {
                 if let Some(pointer_pos) = ctx.input(|i| i.pointer.interact_pos()) {
@@ -1392,11 +1598,19 @@ impl TemplateApp {
                             for recipe_name in filtered_recipes.iter() {
                                 if ui.button(*recipe_name).clicked() {
                                     // Create the craft node
-                                    match self.production_app.add_craft_node(recipe_name, &self.game_data) {
+                                    match self
+                                        .production_app
+                                        .add_craft_node(recipe_name, &self.game_data)
+                                    {
                                         Ok(node_id) => {
-                                            let en = self.build_editor_node(node_id, *recipe_name, "craft");
+                                            let en = self.build_editor_node(
+                                                node_id,
+                                                *recipe_name,
+                                                "craft",
+                                            );
                                             self.snarl.insert_node(egui::pos2(300.0, 300.0), en);
-                                            self.error_message = format!("Created: {}", recipe_name);
+                                            self.error_message =
+                                                format!("Created: {}", recipe_name);
                                             self.error_time = 2.0;
                                         }
                                         Err(e) => {
@@ -1428,7 +1642,12 @@ mod tests {
     fn build_editor_node_maps_icons_from_cache() {
         let mut app = TemplateApp::default();
 
-        let recipe = app.game_data.recipes.get(0).expect("No recipes loaded").clone();
+        let recipe = app
+            .game_data
+            .recipes
+            .get(0)
+            .expect("No recipes loaded")
+            .clone();
         assert!(!recipe.outs.is_empty(), "Recipe has no outputs");
 
         let output_item_name = recipe.outs[0].item_name.clone();
@@ -1440,10 +1659,16 @@ mod tests {
         app.item_icon_cache.insert(output_item_name.clone(), handle);
 
         // Add craft node using the recipe
-        let node_id = app.production_app.add_craft_node(&recipe.name, &app.game_data).expect("Failed to add craft node");
+        let node_id = app
+            .production_app
+            .add_craft_node(&recipe.name, &app.game_data)
+            .expect("Failed to add craft node");
 
         // Build the editor node and ensure output icons contains at least one Some
         let en = app.build_editor_node(node_id, &recipe.display_name, "craft");
-        assert!(en.output_icons.iter().any(|o| o.is_some()), "Output icons were not mapped from cache");
+        assert!(
+            en.output_icons.iter().any(|o| o.is_some()),
+            "Output icons were not mapped from cache"
+        );
     }
 }

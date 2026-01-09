@@ -1,5 +1,5 @@
-use std::cmp::Ordering;
 use serde_json::Value;
+use std::cmp::Ordering;
 
 /// Comparator for Item pointers based on name
 pub struct ItemCompare;
@@ -35,9 +35,7 @@ pub fn load_texture_from_file(_path: &str) -> Option<Vec<u8>> {
 /// Update a save JSON to a given version
 /// Handles backward compatibility by migrating save data between versions
 pub fn update_save(save: &mut Value, to_version: i64) -> bool {
-    let mut current_version = save["save_version"]
-        .as_i64()
-        .unwrap_or(1);
+    let mut current_version = save["save_version"].as_i64().unwrap_or(1);
 
     if current_version == to_version {
         return true;
@@ -231,9 +229,18 @@ mod tests {
 
     #[test]
     fn test_recipe_compare() {
-        assert_eq!(RecipeCompare::compare("Recipe A", "Recipe B"), Ordering::Less);
-        assert_eq!(RecipeCompare::compare("Recipe B", "Recipe A"), Ordering::Greater);
-        assert_eq!(RecipeCompare::compare("Recipe A", "Recipe A"), Ordering::Equal);
+        assert_eq!(
+            RecipeCompare::compare("Recipe A", "Recipe B"),
+            Ordering::Less
+        );
+        assert_eq!(
+            RecipeCompare::compare("Recipe B", "Recipe A"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            RecipeCompare::compare("Recipe A", "Recipe A"),
+            Ordering::Equal
+        );
     }
 
     #[test]

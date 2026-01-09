@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 pub struct Building {
     pub name: String,
     pub somersloop_mult: FractionalNumber, // Multiplier for somersloop boost
-    pub power: f64, // Base power consumption/generation
-    pub power_exponent: f64, // Exponent for underclocking power calculation
-    pub somersloop_power_exponent: f64, // Exponent for somersloop power calculation
-    pub variable_power: bool, // Whether this building has variable power consumption
+    pub power: f64,                        // Base power consumption/generation
+    pub power_exponent: f64,               // Exponent for underclocking power calculation
+    pub somersloop_power_exponent: f64,    // Exponent for somersloop power calculation
+    pub variable_power: bool,              // Whether this building has variable power consumption
 }
 
 impl Building {

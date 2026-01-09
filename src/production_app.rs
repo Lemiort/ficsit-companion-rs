@@ -1,13 +1,13 @@
-use crate::link::Link;
-use crate::node::{CraftNode, GroupNode, OrganizerNode, SinkNode, NodeKind};
-use crate::pin::{Pin, PinDirection};
-use crate::serialization::{
-    ProductionChainFile, SerializedNode, SerializedCraftNode, SerializedSinkNode,
-    SerializedOrganizerNode, SerializedPosition, SerializedLink,
-    SerializedLinkEndpoint, SerializedSinkInput,
-};
 use crate::fractional_number::FractionalNumber;
 use crate::game_data::GameData;
+use crate::link::Link;
+use crate::node::{CraftNode, GroupNode, NodeKind, OrganizerNode, SinkNode};
+use crate::pin::{Pin, PinDirection};
+use crate::serialization::{
+    ProductionChainFile, SerializedCraftNode, SerializedLink, SerializedLinkEndpoint,
+    SerializedNode, SerializedOrganizerNode, SerializedPosition, SerializedSinkInput,
+    SerializedSinkNode,
+};
 
 /// Main production app that manages the graph of nodes and links
 pub struct ProductionApp {
@@ -96,7 +96,7 @@ impl ProductionApp {
             } else {
                 continue;
             };
-            
+
             if id == node_id {
                 return Some(idx);
             }
@@ -105,7 +105,10 @@ impl ProductionApp {
     }
 
     /// Get pin item names for a node (inputs, outputs)
-    pub fn get_node_pin_item_names(&self, node_id: u64) -> Option<(Vec<Option<String>>, Vec<Option<String>>)> {
+    pub fn get_node_pin_item_names(
+        &self,
+        node_id: u64,
+    ) -> Option<(Vec<Option<String>>, Vec<Option<String>>)> {
         let idx = self.find_node_index(node_id)?;
         let node_any = &self.nodes[idx];
         if let Some(n) = node_any.downcast_ref::<CraftNode>() {
@@ -129,7 +132,10 @@ impl ProductionApp {
     }
 
     /// Get pin rates for a node (inputs, outputs) as float strings (e.g., "1.000")
-    pub fn get_node_pin_rates(&self, node_id: u64) -> Option<(Vec<Option<String>>, Vec<Option<String>>)> {
+    pub fn get_node_pin_rates(
+        &self,
+        node_id: u64,
+    ) -> Option<(Vec<Option<String>>, Vec<Option<String>>)> {
         let idx = self.find_node_index(node_id)?;
         let node_any = &self.nodes[idx];
         if let Some(n) = node_any.downcast_ref::<CraftNode>() {
@@ -228,33 +234,50 @@ impl ProductionApp {
         let node_any = &self.nodes[idx];
         if let Some(n) = node_any.downcast_ref::<CraftNode>() {
             let (same, last) = n.compute_power_usage();
-            return Some((same.to_float_string(), last.to_float_string(), n.variable_power));
+            return Some((
+                same.to_float_string(),
+                last.to_float_string(),
+                n.variable_power,
+            ));
         }
         None
     }
 
     /// Get somersloop info for a craft node: (num_somersloop_str, somersloop_mult)
-    pub fn get_node_somersloop_info(&self, node_id: u64) -> Option<(String, Option<crate::fractional_number::FractionalNumber>)> {
+    pub fn get_node_somersloop_info(
+        &self,
+        node_id: u64,
+    ) -> Option<(String, Option<crate::fractional_number::FractionalNumber>)> {
         let idx = self.find_node_index(node_id)?;
         let node_any = &self.nodes[idx];
         if let Some(n) = node_any.downcast_ref::<CraftNode>() {
-            return Some((n.num_somersloop.to_fraction_string(), Some(n.somersloop_mult)));
+            return Some((
+                n.num_somersloop.to_fraction_string(),
+                Some(n.somersloop_mult),
+            ));
         }
         None
     }
 
     /// Set the somersloop count for a craft node. Only positive whole integers allowed.
-    pub fn set_node_somersloop(&mut self, node_id: u64, new_num: crate::fractional_number::FractionalNumber) -> Result<(), String> {
+    pub fn set_node_somersloop(
+        &mut self,
+        node_id: u64,
+        new_num: crate::fractional_number::FractionalNumber,
+    ) -> Result<(), String> {
         // Validate integer non-negative
         if new_num.denominator() != 1 || new_num.numerator() < 0 {
             return Err("somersloop num can only be positive whole integers".into());
         }
-        let idx = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        let idx = self
+            .find_node_index(node_id)
+            .ok_or_else(|| format!("Node {} not found", node_id))?;
         let node_any = &mut self.nodes[idx];
         if let Some(n) = node_any.downcast_mut::<CraftNode>() {
             // Cap to 1 / somersloop_mult if somersloop_mult isn't zero
             if n.somersloop_mult.numerator() != 0 {
-                let max_num = crate::fractional_number::FractionalNumber::new(1, 1) / n.somersloop_mult;
+                let max_num =
+                    crate::fractional_number::FractionalNumber::new(1, 1) / n.somersloop_mult;
                 let mut capped = new_num;
                 if capped > max_num {
                     capped = max_num;
@@ -297,7 +320,9 @@ impl ProductionApp {
 
     /// Set the built state for a node (craft or group). For groups this will propagate to contained craft nodes.
     pub fn set_node_built_state(&mut self, node_id: u64, built: bool) -> Result<(), String> {
-        let idx = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        let idx = self
+            .find_node_index(node_id)
+            .ok_or_else(|| format!("Node {} not found", node_id))?;
         let node_any = &mut self.nodes[idx];
         if let Some(craft) = node_any.downcast_mut::<CraftNode>() {
             craft.built = built;
@@ -317,29 +342,45 @@ impl ProductionApp {
 
     /// Apply a new rate typed by the user into a pin. Performs simple validation
     /// and, for some node kinds (e.g., Craft), derives and applies a new node rate.
-    pub fn set_pin_rate(&mut self, node_id: u64, direction: PinDirection, pin_index: usize, new_rate: FractionalNumber) -> Result<(), String> {
+    pub fn set_pin_rate(
+        &mut self,
+        node_id: u64,
+        direction: PinDirection,
+        pin_index: usize,
+        new_rate: FractionalNumber,
+    ) -> Result<(), String> {
         // Validate rate first
         if !crate::rate_calculator::validate_rate(&new_rate) {
             return Err("Invalid rate".into());
         }
 
-        let node_idx = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        let node_idx = self
+            .find_node_index(node_id)
+            .ok_or_else(|| format!("Node {} not found", node_id))?;
         let node_any = &mut self.nodes[node_idx];
 
         // CraftNode: if setting an output's rate, derive the node rate
         if let Some(n) = node_any.downcast_mut::<CraftNode>() {
             match direction {
                 PinDirection::Output => {
-                    if pin_index >= n.base.outs.len() { return Err("Output pin out of range".into()); }
+                    if pin_index >= n.base.outs.len() {
+                        return Err("Output pin out of range".into());
+                    }
                     let base_rate = n.base.outs[pin_index].base_rate;
-                    if base_rate.numerator() == 0 { return Err("Base rate is zero".into()); }
+                    if base_rate.numerator() == 0 {
+                        return Err("Base rate is zero".into());
+                    }
                     let new_node_rate = new_rate / base_rate;
-                    if !crate::rate_calculator::validate_rate(&new_node_rate) { return Err("Derived node rate invalid".into()); }
+                    if !crate::rate_calculator::validate_rate(&new_node_rate) {
+                        return Err("Derived node rate invalid".into());
+                    }
                     n.update_rate(new_node_rate);
                     return Ok(());
                 }
                 PinDirection::Input => {
-                    if pin_index >= n.base.ins.len() { return Err("Input pin out of range".into()); }
+                    if pin_index >= n.base.ins.len() {
+                        return Err("Input pin out of range".into());
+                    }
                     n.base.ins[pin_index].current_rate = new_rate;
                     return Ok(());
                 }
@@ -350,12 +391,16 @@ impl ProductionApp {
         if let Some(n) = node_any.downcast_mut::<OrganizerNode>() {
             match direction {
                 PinDirection::Input => {
-                    if pin_index >= n.base.ins.len() { return Err("Input pin out of range".into()); }
+                    if pin_index >= n.base.ins.len() {
+                        return Err("Input pin out of range".into());
+                    }
                     n.base.ins[pin_index].current_rate = new_rate;
                     return Ok(());
                 }
                 PinDirection::Output => {
-                    if pin_index >= n.base.outs.len() { return Err("Output pin out of range".into()); }
+                    if pin_index >= n.base.outs.len() {
+                        return Err("Output pin out of range".into());
+                    }
                     n.base.outs[pin_index].current_rate = new_rate;
                     return Ok(());
                 }
@@ -366,12 +411,16 @@ impl ProductionApp {
         if let Some(n) = node_any.downcast_mut::<GroupNode>() {
             match direction {
                 PinDirection::Input => {
-                    if pin_index >= n.base.ins.len() { return Err("Input pin out of range".into()); }
+                    if pin_index >= n.base.ins.len() {
+                        return Err("Input pin out of range".into());
+                    }
                     n.base.ins[pin_index].current_rate = new_rate;
                     return Ok(());
                 }
                 PinDirection::Output => {
-                    if pin_index >= n.base.outs.len() { return Err("Output pin out of range".into()); }
+                    if pin_index >= n.base.outs.len() {
+                        return Err("Output pin out of range".into());
+                    }
                     n.base.outs[pin_index].current_rate = new_rate;
                     return Ok(());
                 }
@@ -379,8 +428,12 @@ impl ProductionApp {
         }
 
         if let Some(n) = node_any.downcast_mut::<SinkNode>() {
-            if direction != PinDirection::Input { return Err("Sink has no outputs".into()); }
-            if pin_index >= n.base.ins.len() { return Err("Input pin out of range".into()); }
+            if direction != PinDirection::Input {
+                return Err("Sink has no outputs".into());
+            }
+            if pin_index >= n.base.ins.len() {
+                return Err("Input pin out of range".into());
+            }
             n.base.ins[pin_index].current_rate = new_rate;
             return Ok(());
         }
@@ -389,15 +442,21 @@ impl ProductionApp {
     }
 
     /// Add a craft node with the given recipe name
-    pub fn add_craft_node(&mut self, recipe_name: &str, game_data: &GameData) -> Result<u64, String> {
+    pub fn add_craft_node(
+        &mut self,
+        recipe_name: &str,
+        game_data: &GameData,
+    ) -> Result<u64, String> {
         // Find recipe by name
-        let recipe = game_data.recipes.iter()
+        let recipe = game_data
+            .recipes
+            .iter()
             .find(|r| r.name == recipe_name)
             .ok_or_else(|| format!("Recipe '{}' not found", recipe_name))?;
-        
+
         let node_id = self.get_next_id();
         let mut craft_node = CraftNode::new(node_id, recipe_name.to_string());
-        
+
         // Set building name from recipe
         craft_node.building_name = recipe.building_name.clone();
         craft_node.recipe_power = recipe.power;
@@ -407,7 +466,7 @@ impl ProductionApp {
             craft_node.somersloop_mult = building.somersloop_mult.clone();
             craft_node.variable_power = building.variable_power;
         }
-        
+
         // Create input pins
         for item in &recipe.ins {
             let pin_id = self.get_next_id();
@@ -420,7 +479,7 @@ impl ProductionApp {
                 FractionalNumber::default(),
             ));
         }
-        
+
         // Create output pins
         for item in &recipe.outs {
             let pin_id = self.get_next_id();
@@ -433,7 +492,7 @@ impl ProductionApp {
                 FractionalNumber::default(),
             ));
         }
-        
+
         self.nodes.push(Box::new(craft_node));
         Ok(node_id)
     }
@@ -442,7 +501,7 @@ impl ProductionApp {
     pub fn add_merger_node(&mut self) -> u64 {
         let node_id = self.get_next_id();
         let mut merger = OrganizerNode::new(node_id, NodeKind::Merger, None);
-        
+
         // Create 2 input pins and 1 output pin
         for _ in 0..2 {
             let pin_id = self.get_next_id();
@@ -455,7 +514,7 @@ impl ProductionApp {
                 FractionalNumber::default(),
             ));
         }
-        
+
         let out_pin_id = self.get_next_id();
         merger.base.outs.push(Pin::new(
             out_pin_id,
@@ -465,7 +524,7 @@ impl ProductionApp {
             false,
             FractionalNumber::default(),
         ));
-        
+
         self.nodes.push(Box::new(merger));
         node_id
     }
@@ -474,7 +533,7 @@ impl ProductionApp {
     pub fn add_custom_splitter_node(&mut self) -> u64 {
         let node_id = self.get_next_id();
         let mut splitter = OrganizerNode::new(node_id, NodeKind::CustomSplitter, None);
-        
+
         // Create 1 input pin and 2 output pins
         let in_pin_id = self.get_next_id();
         splitter.base.ins.push(Pin::new(
@@ -485,7 +544,7 @@ impl ProductionApp {
             false,
             FractionalNumber::default(),
         ));
-        
+
         for _ in 0..2 {
             let pin_id = self.get_next_id();
             splitter.base.outs.push(Pin::new(
@@ -497,7 +556,7 @@ impl ProductionApp {
                 FractionalNumber::default(),
             ));
         }
-        
+
         self.nodes.push(Box::new(splitter));
         node_id
     }
@@ -506,7 +565,7 @@ impl ProductionApp {
     pub fn add_game_splitter_node(&mut self) -> u64 {
         let node_id = self.get_next_id();
         let mut splitter = OrganizerNode::new(node_id, NodeKind::GameSplitter, None);
-        
+
         // Create 1 input pin and 2 output pins
         let in_pin_id = self.get_next_id();
         splitter.base.ins.push(Pin::new(
@@ -517,7 +576,7 @@ impl ProductionApp {
             false,
             FractionalNumber::default(),
         ));
-        
+
         for _ in 0..2 {
             let pin_id = self.get_next_id();
             splitter.base.outs.push(Pin::new(
@@ -529,7 +588,7 @@ impl ProductionApp {
                 FractionalNumber::default(),
             ));
         }
-        
+
         self.nodes.push(Box::new(splitter));
         node_id
     }
@@ -538,7 +597,7 @@ impl ProductionApp {
     pub fn add_sink_node(&mut self) -> u64 {
         let node_id = self.get_next_id();
         let mut sink = SinkNode::new(node_id, None);
-        
+
         // Create 1 input pin
         let pin_id = self.get_next_id();
         sink.base.ins.push(Pin::new(
@@ -549,20 +608,21 @@ impl ProductionApp {
             false,
             FractionalNumber::default(),
         ));
-        
+
         self.nodes.push(Box::new(sink));
         node_id
     }
 
     /// Delete a node and all its links
     pub fn delete_node(&mut self, node_id: u64) -> Result<(), String> {
-        let node_idx = self.find_node_index(node_id)
+        let node_idx = self
+            .find_node_index(node_id)
             .ok_or_else(|| format!("Node {} not found", node_id))?;
-        
+
         // Find all pins for this node
         let mut pin_ids = Vec::new();
         let node_any = &self.nodes[node_idx];
-        
+
         if let Some(n) = node_any.downcast_ref::<CraftNode>() {
             pin_ids.extend(n.base.ins.iter().map(|p| p.id));
             pin_ids.extend(n.base.outs.iter().map(|p| p.id));
@@ -575,7 +635,7 @@ impl ProductionApp {
         } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
             pin_ids.extend(n.base.ins.iter().map(|p| p.id));
         }
-        
+
         // Delete all links connected to this node's pins
         let mut links_to_delete = Vec::new();
         for pin_id in pin_ids {
@@ -583,11 +643,11 @@ impl ProductionApp {
                 links_to_delete.push(link.id);
             }
         }
-        
+
         for link_id in links_to_delete {
             self.delete_link(link_id)?;
         }
-        
+
         // Remove the node
         self.nodes.remove(node_idx);
         Ok(())
@@ -601,11 +661,7 @@ impl ProductionApp {
     }
 
     /// Create a link between two pins
-    pub fn create_link(
-        &mut self,
-        start_pin_id: u64,
-        end_pin_id: u64,
-    ) -> Result<u64, String> {
+    pub fn create_link(&mut self, start_pin_id: u64, end_pin_id: u64) -> Result<u64, String> {
         // Validate pins exist
         let _start_loc = self
             .find_pin_location(start_pin_id)
@@ -744,21 +800,22 @@ impl ProductionApp {
         let node_idx = self.find_node_index(node_id).unwrap();
 
         // Get current locked state, direction, and node kind
-        let (current_locked, direction, node_kind) = if let Some(n) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
-            let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
-            (pin.locked, pin.direction, n.base.kind)
-        } else if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
-            let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
-            (pin.locked, pin.direction, n.base.kind)
-        } else if let Some(n) = self.nodes[node_idx].downcast_ref::<GroupNode>() {
-            let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
-            (pin.locked, pin.direction, n.base.kind)
-        } else if let Some(n) = self.nodes[node_idx].downcast_ref::<SinkNode>() {
-            let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
-            (pin.locked, pin.direction, n.base.kind)
-        } else {
-            return Err("Invalid node type".to_string());
-        };
+        let (current_locked, direction, node_kind) =
+            if let Some(n) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
+                let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
+                (pin.locked, pin.direction, n.base.kind)
+            } else if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
+                let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
+                (pin.locked, pin.direction, n.base.kind)
+            } else if let Some(n) = self.nodes[node_idx].downcast_ref::<GroupNode>() {
+                let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
+                (pin.locked, pin.direction, n.base.kind)
+            } else if let Some(n) = self.nodes[node_idx].downcast_ref::<SinkNode>() {
+                let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
+                (pin.locked, pin.direction, n.base.kind)
+            } else {
+                return Err("Invalid node type".to_string());
+            };
 
         // No change needed
         if current_locked == locked {
@@ -783,13 +840,18 @@ impl ProductionApp {
             } else {
                 link.start_pin_id
             };
-            
+
             // Get linked pin's locked state
-            if let Some((linked_node_id, _linked_direction, linked_pin_idx)) = self.find_pin_location(linked_pin_id) {
+            if let Some((linked_node_id, _linked_direction, linked_pin_idx)) =
+                self.find_pin_location(linked_pin_id)
+            {
                 let linked_node_idx = self.find_node_index(linked_node_id).unwrap();
-                let linked_locked = if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<CraftNode>() {
+                let linked_locked = if let Some(n) =
+                    self.nodes[linked_node_idx].downcast_ref::<CraftNode>()
+                {
                     n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
-                } else if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<OrganizerNode>() {
+                } else if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<OrganizerNode>()
+                {
                     n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
                 } else if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<GroupNode>() {
                     n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
@@ -798,7 +860,7 @@ impl ProductionApp {
                 } else {
                     false
                 };
-                
+
                 if linked_locked != locked {
                     self.set_pin_locked(linked_pin_id, locked)?;
                 }
@@ -808,34 +870,41 @@ impl ProductionApp {
         // Apply node-specific locking rules
         use crate::node::NodeKind;
         use crate::pin::PinDirection;
-        
+
         match node_kind {
             NodeKind::Craft | NodeKind::Group | NodeKind::GameSplitter => {
                 // Lock all pins in the node
-                let all_pin_ids: Vec<u64> = if let Some(n) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
-                    n.base.all_pins().map(|p| p.id).collect()
-                } else if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
-                    n.base.all_pins().map(|p| p.id).collect()
-                } else if let Some(n) = self.nodes[node_idx].downcast_ref::<GroupNode>() {
-                    n.base.all_pins().map(|p| p.id).collect()
-                } else {
-                    Vec::new()
-                };
-                
+                let all_pin_ids: Vec<u64> =
+                    if let Some(n) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
+                        n.base.all_pins().map(|p| p.id).collect()
+                    } else if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
+                        n.base.all_pins().map(|p| p.id).collect()
+                    } else if let Some(n) = self.nodes[node_idx].downcast_ref::<GroupNode>() {
+                        n.base.all_pins().map(|p| p.id).collect()
+                    } else {
+                        Vec::new()
+                    };
+
                 for pid in all_pin_ids {
                     if pid != pin_id {
-                        let (pid_node_id, _pid_direction, pi) = self.find_pin_location(pid).unwrap();
+                        let (pid_node_id, _pid_direction, pi) =
+                            self.find_pin_location(pid).unwrap();
                         let pid_node_idx = self.find_node_index(pid_node_id).unwrap();
-                        let p_locked = if let Some(n) = self.nodes[pid_node_idx].downcast_ref::<CraftNode>() {
+                        let p_locked = if let Some(n) =
+                            self.nodes[pid_node_idx].downcast_ref::<CraftNode>()
+                        {
                             n.base.get_pin_by_flat_index(pi).unwrap().locked
-                        } else if let Some(n) = self.nodes[pid_node_idx].downcast_ref::<OrganizerNode>() {
+                        } else if let Some(n) =
+                            self.nodes[pid_node_idx].downcast_ref::<OrganizerNode>()
+                        {
                             n.base.get_pin_by_flat_index(pi).unwrap().locked
-                        } else if let Some(n) = self.nodes[pid_node_idx].downcast_ref::<GroupNode>() {
+                        } else if let Some(n) = self.nodes[pid_node_idx].downcast_ref::<GroupNode>()
+                        {
                             n.base.get_pin_by_flat_index(pi).unwrap().locked
                         } else {
                             false
                         };
-                        
+
                         if p_locked != locked {
                             self.set_pin_locked(pid, locked)?;
                         }
@@ -845,39 +914,43 @@ impl ProductionApp {
             NodeKind::Merger | NodeKind::CustomSplitter => {
                 // Complex multi-pin logic
                 let is_custom_splitter = node_kind == NodeKind::CustomSplitter;
-                
+
                 // Get multi-pin side (outs for CustomSplitter, ins for Merger)
-                let (multi_pin_ids, single_pin_id) = if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
-                    let multi: Vec<u64> = if is_custom_splitter {
-                        n.base.outs.iter().map(|p| p.id).collect()
+                let (multi_pin_ids, single_pin_id) =
+                    if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
+                        let multi: Vec<u64> = if is_custom_splitter {
+                            n.base.outs.iter().map(|p| p.id).collect()
+                        } else {
+                            n.base.ins.iter().map(|p| p.id).collect()
+                        };
+
+                        let single = if is_custom_splitter {
+                            n.base.ins.first().map(|p| p.id)
+                        } else {
+                            n.base.outs.first().map(|p| p.id)
+                        };
+
+                        (multi, single)
                     } else {
-                        n.base.ins.iter().map(|p| p.id).collect()
+                        (Vec::new(), None)
                     };
-                    
-                    let single = if is_custom_splitter {
-                        n.base.ins.first().map(|p| p.id)
-                    } else {
-                        n.base.outs.first().map(|p| p.id)
-                    };
-                    
-                    (multi, single)
-                } else {
-                    (Vec::new(), None)
-                };
-                
+
                 // Count locked/unlocked multi pins
                 let mut all_locked_ids = Vec::new();
                 let mut all_unlocked_ids = Vec::new();
-                
+
                 for &mpid in &multi_pin_ids {
-                    if let Some((mpid_node_id, _mpid_direction, pi)) = self.find_pin_location(mpid) {
+                    if let Some((mpid_node_id, _mpid_direction, pi)) = self.find_pin_location(mpid)
+                    {
                         let mpid_node_idx = self.find_node_index(mpid_node_id).unwrap();
-                        let is_locked = if let Some(n) = self.nodes[mpid_node_idx].downcast_ref::<OrganizerNode>() {
+                        let is_locked = if let Some(n) =
+                            self.nodes[mpid_node_idx].downcast_ref::<OrganizerNode>()
+                        {
                             n.base.get_pin_by_flat_index(pi).unwrap().locked
                         } else {
                             false
                         };
-                        
+
                         if is_locked {
                             all_locked_ids.push(mpid);
                         } else {
@@ -885,11 +958,11 @@ impl ProductionApp {
                         }
                     }
                 }
-                
+
                 // Single pin updated (input for CustomSplitter, output for Merger)
-                let is_single_side = (direction == PinDirection::Input && is_custom_splitter) ||
-                                    (direction == PinDirection::Output && !is_custom_splitter);
-                
+                let is_single_side = (direction == PinDirection::Input && is_custom_splitter)
+                    || (direction == PinDirection::Output && !is_custom_splitter);
+
                 if is_single_side {
                     // If locked and only one unlocked multi pin remaining, lock it
                     if locked && all_unlocked_ids.len() == 1 {
@@ -904,9 +977,13 @@ impl ProductionApp {
                 } else {
                     // Multi pin updated
                     if let Some(spid) = single_pin_id {
-                        let single_locked = if let Some((spid_node_id, _spid_direction, pi)) = self.find_pin_location(spid) {
+                        let single_locked = if let Some((spid_node_id, _spid_direction, pi)) =
+                            self.find_pin_location(spid)
+                        {
                             let spid_node_idx = self.find_node_index(spid_node_id).unwrap();
-                            if let Some(n) = self.nodes[spid_node_idx].downcast_ref::<OrganizerNode>() {
+                            if let Some(n) =
+                                self.nodes[spid_node_idx].downcast_ref::<OrganizerNode>()
+                            {
                                 n.base.get_pin_by_flat_index(pi).unwrap().locked
                             } else {
                                 false
@@ -914,7 +991,7 @@ impl ProductionApp {
                         } else {
                             false
                         };
-                        
+
                         // If all multi pins locked, lock single pin
                         if all_unlocked_ids.is_empty() {
                             if !single_locked {
@@ -958,15 +1035,23 @@ impl ProductionApp {
     }
 
     /// Load production chain from JSON string
-    pub fn load_from_json(&mut self, json: &str, game_data: Option<&GameData>) -> Result<(), String> {
-        let file: ProductionChainFile = serde_json::from_str(json)
-            .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+    pub fn load_from_json(
+        &mut self,
+        json: &str,
+        game_data: Option<&GameData>,
+    ) -> Result<(), String> {
+        let file: ProductionChainFile =
+            serde_json::from_str(json).map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
         self.load_from_file(file, game_data)
     }
 
     /// Load production chain from file structure
-    pub fn load_from_file(&mut self, file: ProductionChainFile, game_data: Option<&GameData>) -> Result<(), String> {
+    pub fn load_from_file(
+        &mut self,
+        file: ProductionChainFile,
+        game_data: Option<&GameData>,
+    ) -> Result<(), String> {
         // Clear existing data
         self.nodes.clear();
         self.links.clear();
@@ -986,7 +1071,12 @@ impl ProductionApp {
     }
 
     /// Load a single node from serialized format
-    fn load_node(&mut self, serialized: &SerializedNode, _node_index: usize, game_data: Option<&GameData>) -> Result<(), String> {
+    fn load_node(
+        &mut self,
+        serialized: &SerializedNode,
+        _node_index: usize,
+        game_data: Option<&GameData>,
+    ) -> Result<(), String> {
         match serialized {
             SerializedNode::Craft(craft) => {
                 let node_id = self.get_next_id();
@@ -995,7 +1085,7 @@ impl ProductionApp {
                 node.current_rate = craft.rate.clone().into();
                 node.built = craft.built;
                 node.num_somersloop = FractionalNumber::from(craft.num_somersloop as i64);
-                
+
                 // Create pins from recipe if game data is available
                 if let Some(gd) = game_data {
                     if let Some(recipe) = gd.recipes().iter().find(|r| r.name == craft.recipe) {
@@ -1020,7 +1110,7 @@ impl ProductionApp {
                             );
                             node.base.ins.push(pin);
                         }
-                        
+
                         // Create output pins
                         for counted_item in &recipe.outs {
                             let pin_id = self.get_next_id();
@@ -1036,14 +1126,14 @@ impl ProductionApp {
                         }
                     }
                 }
-                
+
                 self.nodes.push(Box::new(node));
             }
             SerializedNode::Sink(sink) => {
                 let node_id = self.get_next_id();
                 let mut node = SinkNode::new(node_id, None);
                 node.base.position = (sink.pos.x, sink.pos.y);
-                
+
                 // Create input pins for each sink input
                 for input in &sink.ins {
                     let pin_id = self.get_next_id();
@@ -1058,7 +1148,7 @@ impl ProductionApp {
                     );
                     node.base.ins.push(pin);
                 }
-                
+
                 self.nodes.push(Box::new(node));
             }
             SerializedNode::Organizer(org) => {
@@ -1067,12 +1157,12 @@ impl ProductionApp {
                 let node_id = self.get_next_id();
                 let mut node = OrganizerNode::new(node_id, kind, org.item.clone());
                 node.base.position = (org.pos.x, org.pos.y);
-                
+
                 // Pins for organizers will be dynamically created based on connections
                 self.nodes.push(Box::new(node));
             }
         }
-        
+
         Ok(())
     }
 
@@ -1080,7 +1170,7 @@ impl ProductionApp {
     fn load_link(&mut self, serialized: &SerializedLink) -> Result<(), String> {
         let start_node_idx = serialized.start.node;
         let end_node_idx = serialized.end.node;
-        
+
         if start_node_idx >= self.nodes.len() {
             return Err(format!("Invalid start node index: {}", start_node_idx));
         }
@@ -1089,37 +1179,48 @@ impl ProductionApp {
         }
 
         // Get pin IDs from node indices and pin indices
-        let start_pin_id = self.get_pin_id_by_indices(start_node_idx, serialized.start.pin, PinDirection::Output)?;
-        let end_pin_id = self.get_pin_id_by_indices(end_node_idx, serialized.end.pin, PinDirection::Input)?;
+        let start_pin_id =
+            self.get_pin_id_by_indices(start_node_idx, serialized.start.pin, PinDirection::Output)?;
+        let end_pin_id =
+            self.get_pin_id_by_indices(end_node_idx, serialized.end.pin, PinDirection::Input)?;
 
         // Create the link
         let link_id = self.get_next_id();
         let link = Link::new(link_id, start_pin_id, end_pin_id);
-        
+
         // Update pin references
         self.set_pin_link_id(start_pin_id, Some(link_id))?;
         self.set_pin_link_id(end_pin_id, Some(link_id))?;
-        
+
         self.links.push(link);
         Ok(())
     }
 
     /// Get pin ID by node index and pin index within that node
-    fn get_pin_id_by_indices(&self, node_idx: usize, pin_idx: usize, direction: PinDirection) -> Result<u64, String> {
+    fn get_pin_id_by_indices(
+        &self,
+        node_idx: usize,
+        pin_idx: usize,
+        direction: PinDirection,
+    ) -> Result<u64, String> {
         let node_box = &self.nodes[node_idx];
-        
+
         // Try each node type
         if let Some(craft) = node_box.downcast_ref::<CraftNode>() {
             let pins = match direction {
                 PinDirection::Input => &craft.base.ins,
                 PinDirection::Output => &craft.base.outs,
             };
-            return pins.get(pin_idx)
+            return pins
+                .get(pin_idx)
                 .map(|p| p.id)
                 .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
         }
         if let Some(sink) = node_box.downcast_ref::<SinkNode>() {
-            return sink.base.ins.get(pin_idx)
+            return sink
+                .base
+                .ins
+                .get(pin_idx)
                 .map(|p| p.id)
                 .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
         }
@@ -1128,7 +1229,8 @@ impl ProductionApp {
                 PinDirection::Input => &org.base.ins,
                 PinDirection::Output => &org.base.outs,
             };
-            return pins.get(pin_idx)
+            return pins
+                .get(pin_idx)
                 .map(|p| p.id)
                 .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
         }
@@ -1137,11 +1239,12 @@ impl ProductionApp {
                 PinDirection::Input => &group.base.ins,
                 PinDirection::Output => &group.base.outs,
             };
-            return pins.get(pin_idx)
+            return pins
+                .get(pin_idx)
                 .map(|p| p.id)
                 .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
         }
-        
+
         Err("Unknown node type".to_string())
     }
 
@@ -1184,8 +1287,7 @@ impl ProductionApp {
     /// Save production chain to JSON string
     pub fn save_to_json(&self) -> Result<String, String> {
         let file = self.save_to_file();
-        serde_json::to_string_pretty(&file)
-            .map_err(|e| format!("Failed to serialize JSON: {}", e))
+        serde_json::to_string_pretty(&file).map_err(|e| format!("Failed to serialize JSON: {}", e))
     }
 
     /// Save production chain to file structure
@@ -1253,14 +1355,17 @@ impl ProductionApp {
                 num_somersloop: craft.num_somersloop.numerator() as u8,
             }))
         } else if let Some(sink) = node_box.downcast_ref::<SinkNode>() {
-            let ins = sink.base.ins.iter().map(|pin| {
-                SerializedSinkInput {
+            let ins = sink
+                .base
+                .ins
+                .iter()
+                .map(|pin| SerializedSinkInput {
                     item: pin.item_name.clone().unwrap_or_default(),
                     num: pin.base_rate.numerator(),
                     den: pin.base_rate.denominator(),
                     locked: pin.locked,
-                }
-            }).collect();
+                })
+                .collect();
 
             Some(SerializedNode::Sink(SerializedSinkNode {
                 kind: 5,
@@ -1300,11 +1405,11 @@ impl ProductionApp {
         Some(SerializedLink {
             start: SerializedLinkEndpoint {
                 node: start_node_idx,
-                pin: start_loc.2,  // Use direction-specific pin index
+                pin: start_loc.2, // Use direction-specific pin index
             },
             end: SerializedLinkEndpoint {
                 node: end_node_idx,
-                pin: end_loc.2,  // Use direction-specific pin index
+                pin: end_loc.2, // Use direction-specific pin index
             },
         })
     }
@@ -1328,16 +1433,31 @@ mod tests {
         let mut craft = CraftNode::new(node_id, "test_recipe".to_string());
         // Create one output pin with base rate 2
         let pin_id = app.get_next_id();
-        craft.base.outs.push(Pin::new(pin_id, PinDirection::Output, node_id, None, false, FractionalNumber::new(2,1)));
+        craft.base.outs.push(Pin::new(
+            pin_id,
+            PinDirection::Output,
+            node_id,
+            None,
+            false,
+            FractionalNumber::new(2, 1),
+        ));
         app.nodes.push(Box::new(craft));
 
         let node_idx = app.find_node_index(node_id).expect("find node");
 
         // Now set output pin rate to 6 -> node rate should become 3
-        app.set_pin_rate(node_id, PinDirection::Output, 0, FractionalNumber::new(6, 1)).expect("set_pin_rate");
+        app.set_pin_rate(
+            node_id,
+            PinDirection::Output,
+            0,
+            FractionalNumber::new(6, 1),
+        )
+        .expect("set_pin_rate");
 
         // Re-borrow immutably to assert
-        let n = app.nodes[node_idx].downcast_ref::<CraftNode>().expect("expected craft node");
+        let n = app.nodes[node_idx]
+            .downcast_ref::<CraftNode>()
+            .expect("expected craft node");
         assert_eq!(n.current_rate, FractionalNumber::new(3, 1));
         assert_eq!(n.base.outs[0].current_rate, FractionalNumber::new(6, 1));
     }

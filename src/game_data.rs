@@ -26,8 +26,8 @@ impl GameData {
 
     /// Load game data from JSON
     pub fn load_from_json(&mut self, json_data: &str) -> Result<(), String> {
-        let data: Value = serde_json::from_str(json_data)
-            .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+        let data: Value =
+            serde_json::from_str(json_data).map_err(|e| format!("Failed to parse JSON: {}", e))?;
 
         // Load version
         if let Some(version) = data.get("version").and_then(|v| v.as_str()) {
@@ -42,11 +42,7 @@ impl GameData {
                     item_obj.get("icon").and_then(|v| v.as_str()),
                     item_obj.get("sink").and_then(|v| v.as_i64()),
                 ) {
-                    let item = Rc::new(Item::new(
-                        name.to_string(),
-                        icon,
-                        sink_value as i32,
-                    ));
+                    let item = Rc::new(Item::new(name.to_string(), icon, sink_value as i32));
                     self.items.insert(name.to_string(), item);
                 }
             }
@@ -59,7 +55,10 @@ impl GameData {
                     let somersloop_mult = building_obj
                         .get("somersloop_mult")
                         .and_then(|v| v.as_f64())
-                        .map(|v| FractionalNumber::from((v * 1000.0) as i64) / FractionalNumber::from(1000))
+                        .map(|v| {
+                            FractionalNumber::from((v * 1000.0) as i64)
+                                / FractionalNumber::from(1000)
+                        })
                         .unwrap_or_else(|| FractionalNumber::new(1, 1));
 
                     let power = building_obj
@@ -104,16 +103,16 @@ impl GameData {
                 ) {
                     // Parse inputs
                     let mut inputs = Vec::new();
-                    if let Some(inputs_array) = recipe_obj.get("inputs").and_then(|v| v.as_array()) {
+                    if let Some(inputs_array) = recipe_obj.get("inputs").and_then(|v| v.as_array())
+                    {
                         for input_obj in inputs_array {
                             if let (Some(item_name), Some(amount)) = (
                                 input_obj.get("name").and_then(|v| v.as_str()),
                                 input_obj.get("amount").and_then(|v| v.as_f64()),
                             ) {
                                 if let Some(item) = self.items.get(item_name) {
-                                    let quantity = FractionalNumber::from(
-                                        (amount * 1000.0) as i64,
-                                    ) / FractionalNumber::from(1000);
+                                    let quantity = FractionalNumber::from((amount * 1000.0) as i64)
+                                        / FractionalNumber::from(1000);
                                     inputs.push(CountedItem::new(item.clone(), quantity));
                                 }
                             }
@@ -122,16 +121,17 @@ impl GameData {
 
                     // Parse outputs
                     let mut outputs = Vec::new();
-                    if let Some(outputs_array) = recipe_obj.get("outputs").and_then(|v| v.as_array()) {
+                    if let Some(outputs_array) =
+                        recipe_obj.get("outputs").and_then(|v| v.as_array())
+                    {
                         for output_obj in outputs_array {
                             if let (Some(item_name), Some(amount)) = (
                                 output_obj.get("name").and_then(|v| v.as_str()),
                                 output_obj.get("amount").and_then(|v| v.as_f64()),
                             ) {
                                 if let Some(item) = self.items.get(item_name) {
-                                    let quantity = FractionalNumber::from(
-                                        (amount * 1000.0) as i64,
-                                    ) / FractionalNumber::from(1000);
+                                    let quantity = FractionalNumber::from((amount * 1000.0) as i64)
+                                        / FractionalNumber::from(1000);
                                     outputs.push(CountedItem::new(item.clone(), quantity));
                                 }
                             }

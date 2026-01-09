@@ -190,8 +190,8 @@ pub struct CraftNode {
     pub same_clock_power: FractionalNumber,
     pub last_underclock_power: FractionalNumber,
     pub num_somersloop: FractionalNumber, // Somersloop boost level
-    pub built: bool, // Tracking for factory building progress
-    pub building_name: String, // Building name from recipe
+    pub built: bool,                      // Tracking for factory building progress
+    pub building_name: String,            // Building name from recipe
 }
 
 impl CraftNode {
@@ -235,8 +235,7 @@ impl CraftNode {
         let num_full_machines = rate_value.floor().max(0.0);
 
         // Boost from somersloop
-        let boost = 1.0
-            + self.num_somersloop.value() * self.somersloop_mult.value();
+        let boost = 1.0 + self.num_somersloop.value() * self.somersloop_mult.value();
         let boost_pow = boost.powf(self.somersloop_power_exponent);
 
         // Same-clock scenario: all machines at identical clock
@@ -246,14 +245,11 @@ impl CraftNode {
             * (rate_value / num_machines).powf(self.power_exponent);
 
         // Last-underclock scenario: full machines plus one partial
-        let mut last_underclock_power = num_full_machines
-            * self.recipe_power
-            * boost_pow;
+        let mut last_underclock_power = num_full_machines * self.recipe_power * boost_pow;
         let fractional_machine = rate_value - num_full_machines;
         if fractional_machine > 0.0 {
-            last_underclock_power += self.recipe_power
-                * boost_pow
-                * fractional_machine.powf(self.power_exponent);
+            last_underclock_power +=
+                self.recipe_power * boost_pow * fractional_machine.powf(self.power_exponent);
         }
 
         let to_fraction = |value: f64| -> FractionalNumber {
@@ -261,7 +257,10 @@ impl CraftNode {
             FractionalNumber::new(rounded, 1000)
         };
 
-        (to_fraction(same_clock_power), to_fraction(last_underclock_power))
+        (
+            to_fraction(same_clock_power),
+            to_fraction(last_underclock_power),
+        )
     }
 }
 
