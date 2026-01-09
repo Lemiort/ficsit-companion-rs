@@ -339,6 +339,10 @@ pub struct TemplateApp {
 
     #[serde(skip)]
     add_node_popup_pos: egui::Pos2,
+
+    // Track which recipes have their checkboxes checked (invisible)
+    #[serde(skip)]
+    recipe_checkbox_state: std::collections::HashMap<String, bool>,
 }
 
 impl Default for TemplateApp {
@@ -390,6 +394,7 @@ impl Default for TemplateApp {
             show_add_node_popup: false,
             add_node_popup_pos: egui::pos2(0.0, 0.0),
             item_icon_cache: std::collections::HashMap::new(),
+            recipe_checkbox_state: std::collections::HashMap::new(),
         };
 
         // Don't add demo nodes if game data loaded successfully
@@ -754,7 +759,7 @@ impl TemplateApp {
                 }
             }
 
-            // Detect right-click to show add node popup (like C++ ShowBackgroundContextMenu)
+            // Right-click context menu is handled in show_dialogs
             if snarl_response.secondary_clicked() {
                 self.show_add_node_popup = true;
                 self.add_node_popup_pos = ui.ctx().pointer_interact_pos().unwrap_or(egui::pos2(300.0, 300.0));
@@ -775,160 +780,236 @@ impl TemplateApp {
     }
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
-        // Add node popup (like C++ AddNewNode)
+        // Add node context menu (right-click menu) - using Area for true context menu behavior
         if self.show_add_node_popup {
-            let mut open = true;
-            egui::Window::new("Add Node")
-                .open(&mut open)
+            let menu_id = egui::Id::new("add_node_context_menu");
+            
+            // Use Area to position the menu at the right-click location
+            let response = egui::Area::new(menu_id)
                 .fixed_pos(self.add_node_popup_pos)
-                .resizable(false)
-                .default_width(300.0)
-                .collapsible(false)
+                .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
-                    // Basic nodes at top
-                    if ui.button("Merger").clicked() {
-                        let node_id = self.production_app.add_merger_node();
-                        let en = self.build_editor_node(node_id, "Merger", "merger");
-                        self.snarl.insert_node(self.add_node_popup_pos, en);
-                        self.error_message = "Created Merger".to_string();
-                        self.error_time = 2.0;
-                        self.show_add_node_popup = false;
-                    }
-                    
-                    if ui.button("Splitter*").on_hover_text("Splitter with independent output rates").clicked() {
-                        let node_id = self.production_app.add_custom_splitter_node();
-                        let en = self.build_editor_node(node_id, "Splitter*", "custom_splitter");
-                        self.snarl.insert_node(self.add_node_popup_pos, en);
-                        self.error_message = "Created Custom Splitter".to_string();
-                        self.error_time = 2.0;
-                        self.show_add_node_popup = false;
-                    }
-                    
-                    if ui.button("Splitter").on_hover_text("Splitter with equal output rates").clicked() {
-                        let node_id = self.production_app.add_game_splitter_node();
-                        let en = self.build_editor_node(node_id, "Splitter", "game_splitter");
-                        self.snarl.insert_node(self.add_node_popup_pos, en);
-                        self.error_message = "Created Game Splitter".to_string();
-                        self.error_time = 2.0;
-                        self.show_add_node_popup = false;
-                    }
-                    
-                    if ui.button("Sink").clicked() {
-                        let node_id = self.production_app.add_sink_node();
-                        let en = self.build_editor_node(node_id, "Sink", "sink");
-                        self.snarl.insert_node(self.add_node_popup_pos, en);
-                        self.error_message = "Created Sink".to_string();
-                        self.error_time = 2.0;
-                        self.show_add_node_popup = false;
-                    }
-                    
-                    ui.separator();
-                    
-                    // Recipe filter like C++ - auto-focus on first show
-                    let filter_response = ui.text_edit_singleline(&mut self.context_menu_recipe_filter);
-                    if ui.memory(|mem| mem.focused().is_none()) {
-                        filter_response.request_focus();
-                    }
-                    
-                    ui.separator();
-                    
-                    // Show recipes
-                    // Clone Rc's to avoid borrowing self while we mutate production_app in the click handler
-                    let all_recipes: Vec<_> = self.game_data.recipes.iter()
-                        .map(|r| r.clone())
-                        .filter(|r| {
-                            if self.context_menu_recipe_filter.is_empty() {
-                                true
-                            } else {
-                                r.name.to_lowercase().contains(&self.context_menu_recipe_filter.to_lowercase()) ||
-                                r.display_name.to_lowercase().contains(&self.context_menu_recipe_filter.to_lowercase())
+                    egui::Frame::popup(ui.style())
+                        .inner_margin(0.0)
+                        .corner_radius(egui::CornerRadius::ZERO)
+                        .show(ui, |ui| {
+                            ui.set_max_width(350.0);
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            
+                            // Helper to create context menu item
+                            let mut menu_item = |ui: &mut egui::Ui, label: &str, tooltip: &str| -> bool {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                                    egui::Sense::click()
+                                );
+                                
+                                if response.hovered() {
+                                    ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, ui.visuals().widgets.hovered.bg_fill);
+                                }
+                                
+                                let mut child_ui = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                                child_ui.spacing_mut().button_padding = egui::vec2(8.0, 0.0);
+                                child_ui.style_mut().interaction.selectable_labels = false;
+                                let text_response = child_ui.label(label);
+                                if !tooltip.is_empty() {
+                                    text_response.on_hover_text(tooltip);
+                                }
+                                
+                                response.clicked()
+                            };
+                            
+                            // Basic nodes at top
+                            if menu_item(ui, "Merger", "") {
+                                let node_id = self.production_app.add_merger_node();
+                                let en = self.build_editor_node(node_id, "Merger", "merger");
+                                self.snarl.insert_node(self.add_node_popup_pos, en);
+                                self.error_message = "Created Merger".to_string();
+                                self.error_time = 2.0;
+                                self.show_add_node_popup = false;
                             }
-                        })
-                        .take(20) // Limit to prevent huge menu
-                        .collect();
-                    
-                    if all_recipes.is_empty() && !self.game_data.recipes.is_empty() {
-                        ui.label("No matching recipes");
-                    } else if self.game_data.recipes.is_empty() {
-                        ui.colored_label(egui::Color32::RED, "⚠ No game data loaded!");
-                        ui.label("Check assets/satisfactory.json");
-                    } else {
-                        egui::ScrollArea::vertical()
-                            .max_height(300.0)
-                            .show(ui, |ui| {
-                                // Two-column grid: names | icons
-                                egui::Grid::new("recipe_grid").striped(true).show(ui, |ui| {
-                                    for recipe in all_recipes {
-                                        let mut clicked = false;
-
-                                        // Left column: recipe name (button)
-                                        if ui.button(&recipe.display_name).clicked() {
-                                            clicked = true;
-                                        }
-
-                                        // Move to second column
-                                        // Right column: icons laid out as [inputs...] -> [outputs...] aligned to the left
-                                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                            let icon_size = egui::Vec2::splat(ui.spacing().interact_size.y * 1.0);
-
-                                            // Temporarily set horizontal item spacing to 0 to eliminate default gaps
-                                            let original_spacing = ui.spacing().item_spacing;
-                                            ui.spacing_mut().item_spacing.x = 0.0;
-
-                                            // Draw inputs (leftmost group) with no spacing between icons
-                                            for inp in recipe.ins.iter().take(4) {
-                                                if let Some(handle) = self.item_icon_cache.get(&inp.item_name) {
-                                                    let (rect, _resp) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
-                                                    ui.painter().image(handle.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0,0.0), egui::pos2(1.0,1.0)), egui::Color32::WHITE);
-                                                }
-                                            }
-
-                                            // Arrow in middle if both sides exist (tight)
-                                            if !recipe.ins.is_empty() && !recipe.outs.is_empty() {
-                                                let arrow_size = egui::Vec2::splat(ui.spacing().interact_size.y * 0.6);
-                                                let (rect, _resp) = ui.allocate_exact_size(arrow_size, egui::Sense::hover());
-                                                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, " --> ", egui::FontId::default(), egui::Color32::WHITE);
-                                            }
-
-                                            // Draw outputs (right group) with no spacing between icons
-                                            for out in recipe.outs.iter().take(4) {
-                                                if let Some(handle) = self.item_icon_cache.get(&out.item_name) {
-                                                    let (rect, _resp) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
-                                                    ui.painter().image(handle.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0,0.0), egui::pos2(1.0,1.0)), egui::Color32::WHITE);
-                                                }
-                                            }
-
-                                            // Restore spacing
-                                            ui.spacing_mut().item_spacing = original_spacing;
-                                        });
-
-                                        ui.end_row();
-
-                                        if clicked {
-                                            match self.production_app.add_craft_node(&recipe.name, &self.game_data) {
-                                                Ok(node_id) => {
-                                                    let en = self.build_editor_node(node_id, &recipe.display_name, "craft");
-                                                    self.snarl.insert_node(self.add_node_popup_pos, en);
-                                                    self.error_message = format!("Created: {}", recipe.display_name);
-                                                    self.error_time = 2.0;
-                                                }
-                                                Err(e) => {
-                                                    self.error_message = format!("Error: {}", e);
-                                                    self.error_time = 3.0;
-                                                }
-                                            }
-                                            self.context_menu_recipe_filter.clear();
-                                            self.show_add_node_popup = false;
-                                        }
+                            
+                            if menu_item(ui, "Splitter*", "Splitter with independent output rates") {
+                                let node_id = self.production_app.add_custom_splitter_node();
+                                let en = self.build_editor_node(node_id, "Splitter*", "custom_splitter");
+                                self.snarl.insert_node(self.add_node_popup_pos, en);
+                                self.error_message = "Created Custom Splitter".to_string();
+                                self.error_time = 2.0;
+                                self.show_add_node_popup = false;
+                            }
+                            
+                            if menu_item(ui, "Splitter", "Splitter with equal output rates") {
+                                let node_id = self.production_app.add_game_splitter_node();
+                                let en = self.build_editor_node(node_id, "Splitter", "game_splitter");
+                                self.snarl.insert_node(self.add_node_popup_pos, en);
+                                self.error_message = "Created Game Splitter".to_string();
+                                self.error_time = 2.0;
+                                self.show_add_node_popup = false;
+                            }
+                            
+                            if menu_item(ui, "Sink", "") {
+                                let node_id = self.production_app.add_sink_node();
+                                let en = self.build_editor_node(node_id, "Sink", "sink");
+                                self.snarl.insert_node(self.add_node_popup_pos, en);
+                                self.error_message = "Created Sink".to_string();
+                                self.error_time = 2.0;
+                                self.show_add_node_popup = false;
+                            }
+                            
+                            ui.separator();
+                            
+                            // Recipe filter like C++ - auto-focus on first show
+                            let filter_response = ui.add(egui::TextEdit::singleline(&mut self.context_menu_recipe_filter).hint_text("Filter..."));
+                            if ui.memory(|mem| mem.focused().is_none()) {
+                                filter_response.request_focus();
+                            }
+                            
+                            ui.separator();
+                            
+                            // Show recipes
+                            let all_recipes: Vec<_> = self.game_data.recipes.iter()
+                                .map(|r| r.clone())
+                                .filter(|r| {
+                                    if self.context_menu_recipe_filter.is_empty() {
+                                        true
+                                    } else {
+                                        r.name.to_lowercase().contains(&self.context_menu_recipe_filter.to_lowercase()) ||
+                                        r.display_name.to_lowercase().contains(&self.context_menu_recipe_filter.to_lowercase())
                                     }
-                                });
-                            });
-                    }
+                                })
+                                .take(20)
+                                .collect();
+                            
+                            if all_recipes.is_empty() && !self.game_data.recipes.is_empty() {
+                                ui.label("No matching recipes");
+                            } else if self.game_data.recipes.is_empty() {
+                                ui.colored_label(egui::Color32::RED, "⚠ No game data loaded!");
+                                ui.label("Check assets/satisfactory.json");
+                            } else {
+                                egui::ScrollArea::vertical()
+                                    .auto_shrink([false; 2])
+                                    .max_height(300.0)
+                                    .show(ui, |ui| {
+                                        // Pin the grid to the available menu width so icon column can sit flush right
+                                        let menu_width = ui.available_width();
+                                        let checkbox_column_width = ui.spacing().interact_size.y;
+                                        let icon_size = egui::Vec2::splat(ui.text_style_height(&egui::TextStyle::Body));
+                                        let mut max_inputs = 0usize;
+                                        let mut max_outputs = 0usize;
+                                        let mut any_arrow = false;
+                                        for recipe in all_recipes.iter() {
+                                            let ins = recipe.ins.len().min(4);
+                                            let outs = recipe.outs.len().min(4);
+                                            max_inputs = max_inputs.max(ins);
+                                            max_outputs = max_outputs.max(outs);
+                                            any_arrow |= ins > 0 && outs > 0;
+                                        }
+                                        let max_icons = max_inputs + max_outputs; // capped at 4 per side
+                                        let arrow_width = if any_arrow { icon_size.x } else { 0.0 };
+                                        let scroll_style = &ui.style().spacing.scroll;
+                                        let scroll_bar_width = if scroll_style.floating {
+                                            scroll_style.bar_width
+                                        } else {
+                                            scroll_style.allocated_width()
+                                        };
+                                        let icon_column_width = (max_icons as f32) * icon_size.x + arrow_width + scroll_bar_width;
+                                        let name_column_width = (menu_width - checkbox_column_width - icon_column_width).max(80.0);
+
+                                        egui::Grid::new("recipe_grid")
+                                            .spacing([0.0, 0.0])
+                                            .num_columns(3)
+                                            .show(ui, |ui| {
+                                                for recipe in all_recipes {
+                                                    // First column: Checkbox for alternate recipes only
+                                                    if recipe.alternate {
+                                                        let checkbox_state = self.recipe_checkbox_state.entry(recipe.name.clone()).or_insert(true);
+                                                        let mut checked = *checkbox_state;
+                                                        if ui.checkbox(&mut checked, "").changed() {
+                                                            self.recipe_checkbox_state.insert(recipe.name.clone(), checked);
+                                                        }
+                                                    } else {
+                                                        // For non-alternate recipes, reserve space but don't show checkbox
+                                                        ui.allocate_space(egui::vec2(checkbox_column_width, checkbox_column_width));
+                                                    }
+                                                    
+                                                    // Second column: Recipe name as clickable area
+                                                    let (rect, response) = ui.allocate_exact_size(
+                                                        egui::vec2(name_column_width, ui.spacing().interact_size.y),
+                                                        egui::Sense::click()
+                                                    );
+                                                    
+                                                    if response.hovered() {
+                                                        ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, ui.visuals().widgets.hovered.bg_fill);
+                                                    }
+                                                    
+                                                    let mut child_ui = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                                                    child_ui.spacing_mut().button_padding = egui::vec2(8.0, 0.0);
+                                                    child_ui.style_mut().interaction.selectable_labels = false;
+                                                    let text_response = child_ui.label(&recipe.display_name);
+                                                    
+                                                    ui.horizontal(|ui| {
+                                                        ui.set_width(icon_column_width);
+                                                        ui.spacing_mut().item_spacing.x = 0.0;
+                                                        ui.style_mut().interaction.selectable_labels = false;
+                                                        
+                                                        // Show input icons with tooltips (left to right from left edge)
+                                                        for inp in recipe.ins.iter().take(4) {
+                                                            if let Some(handle) = self.item_icon_cache.get(&inp.item_name) {
+                                                                let _img_response = ui.add(egui::Image::new(egui::load::SizedTexture::new(handle.id(), icon_size)));
+                                                            }
+                                                        }
+                                                        
+                                                        // Arrow between inputs and outputs
+                                                        if !recipe.ins.is_empty() && !recipe.outs.is_empty() {
+                                                            ui.label("-->");
+                                                        }
+                                                        
+                                                        // Show output icons with tooltips (left to right)
+                                                        for out in recipe.outs.iter().take(4) {
+                                                            if let Some(handle) = self.item_icon_cache.get(&out.item_name) {
+                                                                let _img_response = ui.add(egui::Image::new(egui::load::SizedTexture::new(handle.id(), icon_size)));
+                                                            }
+                                                        }
+                                                    });
+                                                    
+                                                    ui.end_row();
+
+                                                    if response.clicked() {
+                                                        match self.production_app.add_craft_node(&recipe.name, &self.game_data) {
+                                                            Ok(node_id) => {
+                                                                let en = self.build_editor_node(node_id, &recipe.display_name, "craft");
+                                                                self.snarl.insert_node(self.add_node_popup_pos, en);
+                                                                self.error_message = format!("Created: {}", recipe.display_name);
+                                                                self.error_time = 2.0;
+                                                            }
+                                                            Err(e) => {
+                                                                self.error_message = format!("Error: {}", e);
+                                                                self.error_time = 3.0;
+                                                            }
+                                                        }
+                                                        self.context_menu_recipe_filter.clear();
+                                                        self.show_add_node_popup = false;
+                                                    }
+                                                }
+                                            });
+                                    });
+                            }
+                            
+                            if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                                self.show_add_node_popup = false;
+                                self.context_menu_recipe_filter.clear();
+                            }
+                        });
                 });
             
-            if !open {
-                self.show_add_node_popup = false;
-                self.context_menu_recipe_filter.clear();
+            // Close menu if clicked outside of it
+            if ctx.input(|i| i.pointer.primary_clicked()) {
+                if let Some(pointer_pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                    let rect = response.response.rect;
+                    if !rect.contains(pointer_pos) {
+                        self.show_add_node_popup = false;
+                        self.context_menu_recipe_filter.clear();
+                    }
+                }
             }
         }
 
