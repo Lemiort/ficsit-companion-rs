@@ -19,6 +19,10 @@ pub struct EditorNode {
     pub output_icons: Vec<Option<egui::TextureId>>,
     pub output_rates: Vec<Option<String>>,
     pub output_locked: Vec<bool>,
+
+    // Building info for craft nodes
+    pub building_count_str: String,
+    pub building_name: String,
 }
 
 impl EditorNode {
@@ -35,6 +39,8 @@ impl EditorNode {
             output_icons: Vec::new(),
             output_rates: Vec::new(),
             output_locked: Vec::new(),
+            building_count_str: String::new(),
+            building_name: String::new(),
         }
     }
 
@@ -63,6 +69,8 @@ impl EditorNode {
             output_icons,
             output_rates,
             output_locked,
+            building_count_str: String::new(),
+            building_name: String::new(),
         }
     }
 }
@@ -281,6 +289,57 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             ui.label("Out");
         }
         egui_snarl::ui::PinInfo::circle()
+    }
+
+    fn has_footer(&mut self, node: &EditorNode) -> bool {
+        // Show footer if node has a building name (craft nodes)
+        !node.building_name.is_empty()
+    }
+
+    fn show_footer(
+        &mut self,
+        _node_id: egui_snarl::NodeId,
+        _inputs: &[egui_snarl::InPin],
+        _outputs: &[egui_snarl::OutPin],
+        ui: &mut egui::Ui,
+        _snarl: &mut egui_snarl::Snarl<EditorNode>,
+    ) {
+        if let Some(node_ref) = &self.current_node {
+            let node = node_ref.clone();
+            
+            // Only render footer if building name is present
+            if !node.building_name.is_empty() {
+                ui.horizontal(|ui| {
+                    // Use standard spacing from UI style
+                    let space_between = ui.spacing().item_spacing.x;
+                    let field_width = ui.spacing().interact_size.y * 2.0; // Proportional to interact size
+                    
+                    // Measure label width
+                    let label_width = ui.painter()
+                        .layout_no_wrap(
+                            node.building_name.clone(),
+                            egui::FontId::default(),
+                            egui::Color32::WHITE
+                        )
+                        .size()
+                        .x;
+                    
+                    let total_content = field_width + space_between + label_width;
+                    let available = ui.available_width();
+                    let left_space = (available - total_content) / 2.0;
+                    
+                    ui.add_space(left_space.max(0.0));
+                    
+                    // Number field for building count
+                    let key = format!("building:{}", node.id);
+                    let mut tmp = node.building_count_str.clone();
+                    let _response = self.render_fractional_input(ui, &key, &mut tmp, field_width, false);
+                    
+                    // Building name label
+                    ui.label(&node.building_name);
+                });
+            }
+        }
     }
 }
 
@@ -504,7 +563,13 @@ impl TemplateApp {
             .get_node_pin_rates(node_id)
             .unwrap_or((Vec::new(), Vec::new()));
 
-        EditorNode::with_pins(
+        // Fetch building info from production model
+        let (building_count_str, building_name) = self
+            .production_app
+            .get_node_building_info(node_id)
+            .unwrap_or((String::new(), String::new()));
+
+        let mut editor_node = EditorNode::with_pins(
             node_id,
             label,
             node_type,
@@ -516,7 +581,12 @@ impl TemplateApp {
             output_icons,
             output_rates,
             output_locked_flags,
-        )
+        );
+
+        editor_node.building_count_str = building_count_str;
+        editor_node.building_name = building_name;
+
+        editor_node
     }
 }
 

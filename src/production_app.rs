@@ -211,6 +211,18 @@ impl ProductionApp {
         None
     }
 
+    pub fn get_node_building_info(&self, node_id: u64) -> Option<(String, String)> {
+        let idx = self.find_node_index(node_id)?;
+        let node_any = &self.nodes[idx];
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            // building_count_str is the current_rate formatted as a string
+            let count_str = n.current_rate.to_string();
+            let name = n.building_name.clone();
+            return Some((count_str, name));
+        }
+        None
+    }
+
     /// Apply a new rate typed by the user into a pin. Performs simple validation
     /// and, for some node kinds (e.g., Craft), derives and applies a new node rate.
     pub fn set_pin_rate(&mut self, node_id: u64, direction: PinDirection, pin_index: usize, new_rate: FractionalNumber) -> Result<(), String> {
@@ -293,6 +305,9 @@ impl ProductionApp {
         
         let node_id = self.get_next_id();
         let mut craft_node = CraftNode::new(node_id, recipe_name.to_string());
+        
+        // Set building name from recipe
+        craft_node.building_name = recipe.building_name.clone();
         
         // Create input pins
         for item in &recipe.ins {

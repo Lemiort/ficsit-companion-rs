@@ -186,6 +186,7 @@ pub struct CraftNode {
     pub last_underclock_power: FractionalNumber,
     pub num_somersloop: FractionalNumber, // Somersloop boost level
     pub built: bool, // Tracking for factory building progress
+    pub building_name: String, // Building name from recipe
 }
 
 impl CraftNode {
@@ -198,6 +199,7 @@ impl CraftNode {
             last_underclock_power: FractionalNumber::default(),
             num_somersloop: FractionalNumber::default(),
             built: false,
+            building_name: String::new(),
         }
     }
 
