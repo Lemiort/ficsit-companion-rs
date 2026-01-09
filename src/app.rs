@@ -27,6 +27,11 @@ pub struct EditorNode {
     pub same_clock_power_str: String,
     pub last_underclock_power_str: String,
     pub variable_power: bool,
+
+    // Somersloop info
+    pub num_somersloop_str: String,
+    pub somersloop_mult: Option<crate::fractional_number::FractionalNumber>,
+    pub somersloop_icon: Option<egui::TextureId>,
 }
 
 impl EditorNode {
@@ -48,6 +53,9 @@ impl EditorNode {
             same_clock_power_str: String::new(),
             last_underclock_power_str: String::new(),
             variable_power: false,
+            num_somersloop_str: String::new(),
+            somersloop_mult: None,
+            somersloop_icon: None,
         }
     }
 
@@ -81,6 +89,9 @@ impl EditorNode {
             same_clock_power_str: String::new(),
             last_underclock_power_str: String::new(),
             variable_power: false,
+            num_somersloop_str: String::new(),
+            somersloop_mult: None,
+            somersloop_icon: None,
         }
     }
 }
@@ -103,6 +114,8 @@ struct SnarlViewer {
 
     // Pending edits committed by the UI that TemplateApp should process after the Snarl widget is shown
     pending_pin_rate_edits: Vec<(u64, PinDirection, usize, String)>,
+    // Pending somersloop edits: node_id -> string
+    pending_node_somersloop_edits: Vec<(u64, String)>,
 
     // Whether to display same-clock or last-underclock in UI
     pub power_equal_clocks: bool,
@@ -111,6 +124,10 @@ struct SnarlViewer {
 impl SnarlViewer {
     fn drain_pending_edits(&mut self) -> Vec<(u64, PinDirection, usize, String)> {
         std::mem::take(&mut self.pending_pin_rate_edits)
+    }
+
+    fn drain_pending_somersloop_edits(&mut self) -> Vec<(u64, String)> {
+        std::mem::take(&mut self.pending_node_somersloop_edits)
     }
 
     // Render a fractional number input similar to C++ RenderInputText.
@@ -344,7 +361,7 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                         ui.horizontal(|ui| {});
                                     }
 
-                                     // Column 2: building 
+                                     // Column 2: building (center column occupies the center of the footer), content left-to-right
                                     if !node.building_name.is_empty() {
                                         ui.horizontal(|ui| {
                                             if !node.building_count_str.is_empty() {
@@ -359,8 +376,45 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                     } else {
                                         ui.horizontal(|ui| {});
                                     }
-                                    // 3d row reserved
-                                    ui.horizontal(|ui| {});
+
+                                    // Somersloop field (show only if building supports it and not a power generator)
+                                    if !node.num_somersloop_str.is_empty() || node.somersloop_mult.map_or(false, |m| m.numerator() != 0) {
+                                        if node.somersloop_mult.map_or(false, |m| m.numerator() != 0) && !node.last_underclock_power_str.starts_with("-") {
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui|{
+                                                    ui.horizontal(|ui| {
+                                                        if let Some(tex) = node.somersloop_icon {
+                                                            // Use the standard interact height from the UI spacing for the icon size.
+                                                            let icon_size = egui::vec2(ui.spacing().interact_size.y, ui.spacing().interact_size.y);
+                                                            let (rect, resp) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
+                                                            ui.painter().image(tex, rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                                                            if resp.hovered() {
+                                                                resp.on_hover_text("Alien Production Amplification");
+                                                            }
+                                                        }
+
+                                                        let somersloop_width = ui.painter().layout_no_wrap("4".to_owned(), egui::FontId::default(), egui::Color32::WHITE).size().x + 8.0;
+                                                        let key = format!("node:{}:somersloop", node.id);
+                                                        let mut tmp = node.num_somersloop_str.clone();
+                                                        let is_locked = node.input_locked.get(0).copied().unwrap_or(false) || node.output_locked.get(0).copied().unwrap_or(false);
+                                                        let resp = self.render_fractional_input(ui, &key, &mut tmp, somersloop_width, is_locked);
+
+                                                        if resp.lost_focus() && resp.changed() {
+                                                            // Commit somersloop edit from the internal buffer (render_fractional_input stores it)
+                                                            if let Some(buf) = self.edit_buffers.get(&key) {
+                                                                self.pending_node_somersloop_edits.push((node.id, buf.clone()));
+                                                            }
+                                                        }
+                                                    });
+                                                }
+                                            );
+                                        }
+                                    }
+                                    else{
+                                        // 3rd column reserved
+                                        ui.horizontal(|ui| {});
+                                    }
                                     ui.end_row();
                             });
 
@@ -525,6 +579,29 @@ impl TemplateApp {
             use image::ImageReader as ImageReader;
             use egui::ColorImage;
 
+                // Try loading a special somersloop icon used in node footers (optional)
+            let somersloop_path = "assets/icons/Wat_1_64.png";
+            if !self.item_icon_cache.contains_key("Somersloop") {
+                match ImageReader::open(somersloop_path) {
+                    Ok(reader) => match reader.decode() {
+                        Ok(img) => {
+                            let img = img.to_rgba8();
+                            let size = [img.width() as usize, img.height() as usize];
+                            let pixels = img.into_raw();
+                            let color_image = ColorImage::from_rgba_unmultiplied(size, &pixels);
+                            let texture = cc.egui_ctx.load_texture("Somersloop".to_owned(), color_image, egui::TextureOptions::default());
+                            self.item_icon_cache.insert("Somersloop".to_owned(), texture);
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to decode somersloop icon {}: {}", somersloop_path, e);
+                        }
+                    },
+                    Err(_) => {
+                        // not fatal; icon simply not present
+                    }
+                }
+            }
+
             for (name, item_rc) in self.game_data.items.iter() {
                 // Avoid duplicate loads
                 if self.item_icon_cache.contains_key(name) {
@@ -609,6 +686,9 @@ impl TemplateApp {
             .get_node_power_info(node_id)
             .unwrap_or((String::new(), String::new(), false));
 
+        // Fetch somersloop info from production model (num and multiplier if available)
+        let (num_somersloop_str, somersloop_mult) = self.production_app.get_node_somersloop_info(node_id).unwrap_or((String::new(), None));
+
         let mut editor_node = EditorNode::with_pins(
             node_id,
             label,
@@ -628,6 +708,10 @@ impl TemplateApp {
         editor_node.same_clock_power_str = same_clock_power_str;
         editor_node.last_underclock_power_str = last_underclock_power_str;
         editor_node.variable_power = variable_power;
+        editor_node.num_somersloop_str = num_somersloop_str;
+        editor_node.somersloop_mult = somersloop_mult;
+        // Map special somersloop icon from cache (if present)
+        editor_node.somersloop_icon = self.item_icon_cache.get("Somersloop").map(|h| h.id());
 
         editor_node
     }
@@ -877,6 +961,26 @@ impl TemplateApp {
                     }
                     Err(_) => {
                         self.error_message = "Invalid rate format".to_string();
+                        self.error_time = 2.0;
+                    }
+                }
+            }
+
+            // Process somersloop edits collected by the SnarlViewer
+            for (node_id, text) in self.snarl_viewer.drain_pending_somersloop_edits() {
+                match crate::fractional_number::FractionalNumber::from_string(&text) {
+                    Ok(f) => {
+                        // Only accept non-negative integers. Use ProductionApp to apply and validate cap
+                        match self.production_app.set_node_somersloop(node_id, f) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                self.error_message = format!("Error: {}", e);
+                                self.error_time = 3.0;
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        self.error_message = "Invalid somersloop format".to_string();
                         self.error_time = 2.0;
                     }
                 }

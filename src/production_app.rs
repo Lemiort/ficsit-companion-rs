@@ -233,6 +233,43 @@ impl ProductionApp {
         None
     }
 
+    /// Get somersloop info for a craft node: (num_somersloop_str, somersloop_mult)
+    pub fn get_node_somersloop_info(&self, node_id: u64) -> Option<(String, Option<crate::fractional_number::FractionalNumber>)> {
+        let idx = self.find_node_index(node_id)?;
+        let node_any = &self.nodes[idx];
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            return Some((n.num_somersloop.to_fraction_string(), Some(n.somersloop_mult)));
+        }
+        None
+    }
+
+    /// Set the somersloop count for a craft node. Only positive whole integers allowed.
+    pub fn set_node_somersloop(&mut self, node_id: u64, new_num: crate::fractional_number::FractionalNumber) -> Result<(), String> {
+        // Validate integer non-negative
+        if new_num.denominator() != 1 || new_num.numerator() < 0 {
+            return Err("somersloop num can only be positive whole integers".into());
+        }
+        let idx = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        let node_any = &mut self.nodes[idx];
+        if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+            // Cap to 1 / somersloop_mult if somersloop_mult isn't zero
+            if n.somersloop_mult.numerator() != 0 {
+                let max_num = crate::fractional_number::FractionalNumber::new(1, 1) / n.somersloop_mult;
+                let mut capped = new_num;
+                if capped > max_num {
+                    capped = max_num;
+                }
+                n.num_somersloop = capped;
+            } else {
+                n.num_somersloop = new_num;
+            }
+            // Recompute rates for this node based on new boost level
+            n.update_rate(n.current_rate);
+            return Ok(());
+        }
+        Err("Unsupported node kind for somersloop edit".into())
+    }
+
     /// Apply a new rate typed by the user into a pin. Performs simple validation
     /// and, for some node kinds (e.g., Craft), derives and applies a new node rate.
     pub fn set_pin_rate(&mut self, node_id: u64, direction: PinDirection, pin_index: usize, new_rate: FractionalNumber) -> Result<(), String> {
