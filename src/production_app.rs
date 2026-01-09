@@ -223,6 +223,16 @@ impl ProductionApp {
         None
     }
 
+    pub fn get_node_power_info(&self, node_id: u64) -> Option<(String, String, bool)> {
+        let idx = self.find_node_index(node_id)?;
+        let node_any = &self.nodes[idx];
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            let (same, last) = n.compute_power_usage();
+            return Some((same.to_float_string(), last.to_float_string(), n.variable_power));
+        }
+        None
+    }
+
     /// Apply a new rate typed by the user into a pin. Performs simple validation
     /// and, for some node kinds (e.g., Craft), derives and applies a new node rate.
     pub fn set_pin_rate(&mut self, node_id: u64, direction: PinDirection, pin_index: usize, new_rate: FractionalNumber) -> Result<(), String> {
@@ -308,6 +318,13 @@ impl ProductionApp {
         
         // Set building name from recipe
         craft_node.building_name = recipe.building_name.clone();
+        craft_node.recipe_power = recipe.power;
+        if let Some(building) = &recipe.building {
+            craft_node.power_exponent = building.power_exponent;
+            craft_node.somersloop_power_exponent = building.somersloop_power_exponent;
+            craft_node.somersloop_mult = building.somersloop_mult.clone();
+            craft_node.variable_power = building.variable_power;
+        }
         
         // Create input pins
         for item in &recipe.ins {
@@ -900,6 +917,14 @@ impl ProductionApp {
                 // Create pins from recipe if game data is available
                 if let Some(gd) = game_data {
                     if let Some(recipe) = gd.recipes().iter().find(|r| r.name == craft.recipe) {
+                        node.building_name = recipe.building_name.clone();
+                        node.recipe_power = recipe.power;
+                        if let Some(building) = &recipe.building {
+                            node.power_exponent = building.power_exponent;
+                            node.somersloop_power_exponent = building.somersloop_power_exponent;
+                            node.somersloop_mult = building.somersloop_mult.clone();
+                            node.variable_power = building.variable_power;
+                        }
                         // Create input pins
                         for counted_item in &recipe.ins {
                             let pin_id = self.get_next_id();

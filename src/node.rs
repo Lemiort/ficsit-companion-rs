@@ -181,6 +181,11 @@ impl Node {
 pub struct CraftNode {
     pub base: Node,
     pub recipe_name: String,
+    pub recipe_power: f64,
+    pub power_exponent: f64,
+    pub somersloop_power_exponent: f64,
+    pub somersloop_mult: FractionalNumber,
+    pub variable_power: bool,
     pub current_rate: FractionalNumber,
     pub same_clock_power: FractionalNumber,
     pub last_underclock_power: FractionalNumber,
@@ -194,6 +199,11 @@ impl CraftNode {
         Self {
             base: Node::new(id, NodeKind::Craft),
             recipe_name,
+            recipe_power: 0.0,
+            power_exponent: 1.0,
+            somersloop_power_exponent: 1.0,
+            somersloop_mult: FractionalNumber::new(1, 1),
+            variable_power: false,
             current_rate: FractionalNumber::default(),
             same_clock_power: FractionalNumber::default(),
             last_underclock_power: FractionalNumber::default(),
@@ -214,11 +224,44 @@ impl CraftNode {
         }
     }
 
-    pub fn compute_power_usage(&mut self, building_power: f64, _power_exponent: f64) {
-        // Simplified power calculation
+    /// Compute power usage in MW for current rate.
+    pub fn compute_power_usage(&self) -> (FractionalNumber, FractionalNumber) {
         let rate_value = self.current_rate.value();
-        self.same_clock_power =
-            FractionalNumber::from((building_power * rate_value) as i64 * 1000) / FractionalNumber::from(1000);
+        if rate_value <= 0.0 {
+            return (FractionalNumber::default(), FractionalNumber::default());
+        }
+
+        let num_machines = rate_value.ceil().max(1.0);
+        let num_full_machines = rate_value.floor().max(0.0);
+
+        // Boost from somersloop
+        let boost = 1.0
+            + self.num_somersloop.value() * self.somersloop_mult.value();
+        let boost_pow = boost.powf(self.somersloop_power_exponent);
+
+        // Same-clock scenario: all machines at identical clock
+        let same_clock_power = num_machines
+            * self.recipe_power
+            * boost_pow
+            * (rate_value / num_machines).powf(self.power_exponent);
+
+        // Last-underclock scenario: full machines plus one partial
+        let mut last_underclock_power = num_full_machines
+            * self.recipe_power
+            * boost_pow;
+        let fractional_machine = rate_value - num_full_machines;
+        if fractional_machine > 0.0 {
+            last_underclock_power += self.recipe_power
+                * boost_pow
+                * fractional_machine.powf(self.power_exponent);
+        }
+
+        let to_fraction = |value: f64| -> FractionalNumber {
+            let rounded = (value * 1000.0).round() as i64;
+            FractionalNumber::new(rounded, 1000)
+        };
+
+        (to_fraction(same_clock_power), to_fraction(last_underclock_power))
     }
 }
 

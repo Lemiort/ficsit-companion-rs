@@ -1,4 +1,5 @@
 use crate::production_app::ProductionApp;
+use egui::text;
 use serde::{Deserialize, Serialize};
 
 /// Simple node representation for the node editor
@@ -23,6 +24,9 @@ pub struct EditorNode {
     // Building info for craft nodes
     pub building_count_str: String,
     pub building_name: String,
+    pub same_clock_power_str: String,
+    pub last_underclock_power_str: String,
+    pub variable_power: bool,
 }
 
 impl EditorNode {
@@ -41,6 +45,9 @@ impl EditorNode {
             output_locked: Vec::new(),
             building_count_str: String::new(),
             building_name: String::new(),
+            same_clock_power_str: String::new(),
+            last_underclock_power_str: String::new(),
+            variable_power: false,
         }
     }
 
@@ -71,6 +78,9 @@ impl EditorNode {
             output_locked,
             building_count_str: String::new(),
             building_name: String::new(),
+            same_clock_power_str: String::new(),
+            last_underclock_power_str: String::new(),
+            variable_power: false,
         }
     }
 }
@@ -93,6 +103,9 @@ struct SnarlViewer {
 
     // Pending edits committed by the UI that TemplateApp should process after the Snarl widget is shown
     pending_pin_rate_edits: Vec<(u64, PinDirection, usize, String)>,
+
+    // Whether to display same-clock or last-underclock in UI
+    pub power_equal_clocks: bool,
 }
 
 impl SnarlViewer {
@@ -110,24 +123,13 @@ impl SnarlViewer {
         // Reserve a rectangle of exact size for the input
         let (rect, _alloc_response) = ui.allocate_exact_size(egui::Vec2::new(width, ui.spacing().interact_size.y), egui::Sense::click());
 
-        if disabled {
-            // Purple-ish locked background and render text label (white)
-            ui.painter().rect_filled(rect, 4.0, egui::Color32::from_rgb(120, 70, 160));
-            let text_pos = egui::pos2(rect.left() + 6.0, rect.center().y - 6.0);
-            ui.painter().text(text_pos, egui::Align2::LEFT_CENTER, buf_ref.as_str(), egui::FontId::default(), egui::Color32::WHITE);
-            let resp = ui.interact(rect, ui.id().with(key), egui::Sense::hover());
-            if resp.hovered() {
-                if let Ok(f) = crate::fractional_number::FractionalNumber::from_string(buf_ref) {
-                    let tip = format!("{} = {}", f.to_fraction_string(), f.to_float_string());
-                    return resp.on_hover_text(tip);
-                }
-            }
-            return resp;
-        }
-
         // Active input: render TextEdit inside the reserved rect
         let text_edit = egui::TextEdit::singleline(buf_ref).desired_width(width);
-        let response = ui.put(rect, text_edit);
+        let response = ui.allocate_ui_at_rect(rect, |ui| {
+            ui.add_enabled(!disabled,
+                text_edit
+            )
+        }).response;
 
         // Focus highlight (blue)
         if response.has_focus() || response.gained_focus() {
@@ -292,8 +294,10 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
     }
 
     fn has_footer(&mut self, node: &EditorNode) -> bool {
-        // Show footer if node has a building name (craft nodes)
+        // Show footer if node has building or power info (craft nodes)
         !node.building_name.is_empty()
+            || !node.same_clock_power_str.is_empty()
+            || !node.last_underclock_power_str.is_empty()
     }
 
     fn show_footer(
@@ -306,39 +310,64 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
     ) {
         if let Some(node_ref) = &self.current_node {
             let node = node_ref.clone();
-            
-            // Only render footer if building name is present
-            if !node.building_name.is_empty() {
-                ui.horizontal(|ui| {
-                    // Use standard spacing from UI style
-                    let space_between = ui.spacing().item_spacing.x;
-                    let field_width = ui.spacing().interact_size.y * 2.0; // Proportional to interact size
-                    
-                    // Measure label width
-                    let label_width = ui.painter()
-                        .layout_no_wrap(
-                            node.building_name.clone(),
-                            egui::FontId::default(),
-                            egui::Color32::WHITE
-                        )
-                        .size()
-                        .x;
-                    
-                    let total_content = field_width + space_between + label_width;
-                    let available = ui.available_width();
-                    let left_space = (available - total_content) / 2.0;
-                    
-                    ui.add_space(left_space.max(0.0));
-                    
-                    // Number field for building count
-                    let key = format!("building:{}", node.id);
-                    let mut tmp = node.building_count_str.clone();
-                    let _response = self.render_fractional_input(ui, &key, &mut tmp, field_width, false);
-                    
-                    // Building name label
-                    ui.label(&node.building_name);
-                });
-            }
+            ui.vertical(|ui| {
+                // Power + building row matching C++ node bottom: single power input (choice depends on power mode), MW suffix, then pushed node rate + building
+                let power_value = if self.power_equal_clocks { node.same_clock_power_str.clone() } else { node.last_underclock_power_str.clone() };
+                if !power_value.is_empty() || !node.building_name.is_empty() {
+                    ui.horizontal(|ui| {
+
+                        // Power sizes (number field + spacing + MW label)
+                        let power_field_width = ui.painter().layout_no_wrap("000000.00".to_owned(), egui::FontId::default(), egui::Color32::WHITE).size().x + 8.0;
+                        let power_label_text = if node.variable_power { "~MW" } else { "MW" };
+
+                        // Building sizes (count field + spacing + label)
+                        let center_field_width = ui.spacing().interact_size.y * 2.0;
+
+                        egui::Grid::new(format!("footer_grid:{}", node.id))
+                            .num_columns(3)
+                            .spacing([8.0, 8.0])
+                            .min_col_width(ui.available_width() / 3.0)
+                            .show(ui, |ui| {
+                                     if !power_value.is_empty() {
+                                        ui.horizontal(|ui| {
+                                            let key = format!("node:{}:power", node.id);
+                                            let mut tmp = power_value.clone();
+                                            let locked = true; // Power is always locked in this UI
+                                            let input_resp = self.render_fractional_input(ui, &key, &mut tmp, power_field_width, locked);
+                                            // Render combined label ("~MW" when variable) similar to C++
+                                            let label_resp = ui.label(power_label_text);
+                                            if node.variable_power && (label_resp.hovered() || input_resp.hovered()) {
+                                                label_resp.on_hover_text("Average power");
+                                            }
+                                        });
+                                    } else {
+                                        ui.horizontal(|ui| {});
+                                    }
+
+                                     // Column 2: building 
+                                    if !node.building_name.is_empty() {
+                                        ui.horizontal(|ui| {
+                                            if !node.building_count_str.is_empty() {
+                                                let key = format!("building:{}", node.id);
+                                                let mut tmp = node.building_count_str.clone();
+                                                let _r = self.render_fractional_input(ui, &key, &mut tmp, center_field_width, false);
+                                            }
+                                            if !node.building_name.is_empty() {
+                                                ui.label(&node.building_name);
+                                            }
+                                        });
+                                    } else {
+                                        ui.horizontal(|ui| {});
+                                    }
+                                    // 3d row reserved
+                                    ui.horizontal(|ui| {});
+                                    ui.end_row();
+                            });
+
+                    });
+                }
+
+            });
         }
     }
 }
@@ -364,6 +393,7 @@ pub struct TemplateApp {
 
     // UI State - Left Panel
     left_panel_collapsed: bool,
+    power_equal_clocks: bool,
     save_name: String,
     file_suggestions: Vec<(String, bool)>,
     show_controls_popup: bool,
@@ -441,6 +471,7 @@ impl Default for TemplateApp {
             snarl_viewer: SnarlViewer::default(),
             snarl_style,
             left_panel_collapsed: false,
+            power_equal_clocks: false,
             save_name: String::new(),
             file_suggestions: Vec::new(),
             show_controls_popup: false,
@@ -480,6 +511,9 @@ impl TemplateApp {
 
         // Load textures for game items using the egui context
         app.load_item_textures(cc);
+
+        // Ensure viewer respects current power mode
+        app.snarl_viewer.power_equal_clocks = app.power_equal_clocks;
 
         app
     }
@@ -569,6 +603,12 @@ impl TemplateApp {
             .get_node_building_info(node_id)
             .unwrap_or((String::new(), String::new()));
 
+        // Fetch power info from production model
+        let (same_clock_power_str, last_underclock_power_str, variable_power) = self
+            .production_app
+            .get_node_power_info(node_id)
+            .unwrap_or((String::new(), String::new(), false));
+
         let mut editor_node = EditorNode::with_pins(
             node_id,
             label,
@@ -585,6 +625,9 @@ impl TemplateApp {
 
         editor_node.building_count_str = building_count_str;
         editor_node.building_name = building_name;
+        editor_node.same_clock_power_str = same_clock_power_str;
+        editor_node.last_underclock_power_str = last_underclock_power_str;
+        editor_node.variable_power = variable_power;
 
         editor_node
     }
@@ -763,6 +806,16 @@ impl TemplateApp {
                             "Recipes: {}",
                             self.production_app.get_recipe_names().len()
                         ));
+
+                        // Power mode selection (mirror C++)
+                        let resp = ui.checkbox(&mut self.power_equal_clocks, "Compute power with equal clocks");
+                        if resp.changed() {
+                            // Immediate update in viewer
+                            self.snarl_viewer.power_equal_clocks = self.power_equal_clocks;
+                        }
+                        if resp.hovered() {
+                            resp.on_hover_text("If set, the power will be calculated assuming all machines in a node are set at the same clock rate\nOtherwise, it will be calculated with machines at 100% and one last machine underclocked");
+                        }
                     });
 
                     ui.separator();
