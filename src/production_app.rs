@@ -793,6 +793,98 @@ impl ProductionApp {
         Ok(())
     }
 
+    /// Add an input pin to a node (used by UI + button)
+    pub fn add_input_pin_to_node(&mut self, node_id: u64) -> Result<(), String> {
+        let ni = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        // Allocate id before borrowing node mutably
+        let pin_id = self.get_next_id();
+        if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+            let locked = n.base.outs.get(0).map(|p| p.locked).unwrap_or(false);
+            n.base.ins.push(Pin::new(pin_id, PinDirection::Input, node_id, n.item_name.clone(), locked, FractionalNumber::default()));
+            Ok(())
+        } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+            n.base.ins.push(Pin::new(pin_id, PinDirection::Input, node_id, None, false, FractionalNumber::default()));
+            Ok(())
+        } else {
+            Err("Unsupported node kind for add input".into())
+        }
+    }
+
+    /// Add an output pin to a node (used by UI + button)
+    pub fn add_output_pin_to_node(&mut self, node_id: u64) -> Result<(), String> {
+        let ni = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        // Allocate id before borrowing node mutably
+        let pin_id = self.get_next_id();
+        if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+            let locked = n.base.ins.get(0).map(|p| p.locked).unwrap_or(false);
+            n.base.outs.push(Pin::new(pin_id, PinDirection::Output, node_id, n.item_name.clone(), locked, FractionalNumber::default()));
+            Ok(())
+        } else {
+            Err("Unsupported node kind for add output".into())
+        }
+    }
+
+    /// Remove an input pin from a node (used by UI x button)
+    pub fn remove_input_pin_from_node(&mut self, node_id: u64, idx: usize) -> Result<(), String> {
+        let ni = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        // Read pin id immutably first to avoid double borrowing self
+        if let Some(n) = self.nodes[ni].downcast_ref::<OrganizerNode>() {
+            if idx >= n.base.ins.len() {
+                return Err("Input index out of range".into());
+            }
+            let pin_id = n.base.ins[idx].id;
+            if let Some(link) = self.find_link_by_pin(pin_id) {
+                let lid = link.id;
+                self.delete_link(lid)?;
+            }
+            // now remove mutably
+            if let Some(nm) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                nm.base.ins.remove(idx);
+                return Ok(());
+            }
+            unreachable!();
+        } else if let Some(n) = self.nodes[ni].downcast_ref::<SinkNode>() {
+            if idx >= n.base.ins.len() {
+                return Err("Input index out of range".into());
+            }
+            let pin_id = n.base.ins[idx].id;
+            if let Some(link) = self.find_link_by_pin(pin_id) {
+                let lid = link.id;
+                self.delete_link(lid)?;
+            }
+            if let Some(nm) = self.nodes[ni].downcast_mut::<SinkNode>() {
+                nm.base.ins.remove(idx);
+                return Ok(());
+            }
+            unreachable!();
+        } else {
+            Err("Unsupported node kind for remove input".into())
+        }
+    }
+
+    /// Remove an output pin from a node (used by UI x button)
+    pub fn remove_output_pin_from_node(&mut self, node_id: u64, idx: usize) -> Result<(), String> {
+        let ni = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        // Read pin id immutably first
+        if let Some(n) = self.nodes[ni].downcast_ref::<OrganizerNode>() {
+            if idx >= n.base.outs.len() {
+                return Err("Output index out of range".into());
+            }
+            let pin_id = n.base.outs[idx].id;
+            if let Some(link) = self.find_link_by_pin(pin_id) {
+                let lid = link.id;
+                self.delete_link(lid)?;
+            }
+            if let Some(nm) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                nm.base.outs.remove(idx);
+                return Ok(());
+            }
+            unreachable!();
+        } else {
+            Err("Unsupported node kind for remove output".into())
+        }
+    }
+
     /// Set pin locked state with propagation logic from C++
     pub fn set_pin_locked(&mut self, pin_id: u64, locked: bool) -> Result<(), String> {
         let (node_id, _direction, pin_idx) =

@@ -136,11 +136,18 @@ struct SnarlViewer {
     // Pending group built edits: node_id -> bool
     pending_node_built_edits: Vec<(u64, bool)>,
 
+    // Pending pin add/remove ops collected during rendering
+    pending_pin_adds: Vec<(u64, crate::pin::PinDirection)>,
+    pending_pin_removes: Vec<(u64, crate::pin::PinDirection, usize)>,
+
     // Whether to display same-clock or last-underclock in UI
     pub power_equal_clocks: bool,
 }
 
 impl SnarlViewer {
+    // Fixed inset before the footer '+' (used for both input and output placements)
+    const FOOTER_ADD_INSET: f32 = 48.0;
+
     fn drain_pending_edits(&mut self) -> Vec<(u64, PinDirection, usize, String)> {
         std::mem::take(&mut self.pending_pin_rate_edits)
     }
@@ -151,6 +158,14 @@ impl SnarlViewer {
 
     fn drain_pending_built_edits(&mut self) -> Vec<(u64, bool)> {
         std::mem::take(&mut self.pending_node_built_edits)
+    }
+
+    fn drain_pending_pin_adds(&mut self) -> Vec<(u64, crate::pin::PinDirection)> {
+        std::mem::take(&mut self.pending_pin_adds)
+    }
+
+    fn drain_pending_pin_removes(&mut self) -> Vec<(u64, crate::pin::PinDirection, usize)> {
+        std::mem::take(&mut self.pending_pin_removes)
     }
 
     // Render a fractional number input similar to C++ RenderInputText.
@@ -235,6 +250,45 @@ impl SnarlViewer {
         }
         (self.output_row_width.unwrap(), self.output_row_height.unwrap())
     }
+
+    // Helper to render a '+' in the footer aligned to a column depending on direction
+    // Input -> column 1 (left) | Output -> column 3 (right)
+    fn render_footer_add_button_middle(&mut self, ui: &mut egui::Ui, node: &EditorNode, dir: PinDirection) {
+        egui::Grid::new(format!("footer_add_col:{}:{}", node.id, match dir {
+            PinDirection::Input => "in",
+            PinDirection::Output => "out",
+        }))
+        .num_columns(3)
+        .spacing([8.0, 8.0])
+        .min_col_width(ui.available_width() / 3.0)
+        .show(ui, |ui| {
+            match dir {
+                PinDirection::Input => {
+                    // Place in first column with left inset
+                    ui.horizontal(|ui| {
+                        ui.add_space(Self::FOOTER_ADD_INSET);
+                        if ui.add(egui::Button::new("+").corner_radius(egui::CornerRadius::same(0)).small()).clicked() {
+                            self.pending_pin_adds.push((node.id, dir));
+                        }
+                    });
+                    ui.horizontal(|ui| {});
+                    ui.horizontal(|ui| {});
+                }
+                PinDirection::Output => {
+                    ui.horizontal(|ui| {});
+                    ui.horizontal(|ui| {});
+                    // Place in third column with right inset using RTL layout
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(Self::FOOTER_ADD_INSET);
+                        if ui.add(egui::Button::new("+").corner_radius(egui::CornerRadius::same(0)).small()).clicked() {
+                            self.pending_pin_adds.push((node.id, dir));
+                        }
+                    });
+                }
+            }
+            ui.end_row();
+        });
+    }
 }
 
 impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
@@ -300,6 +354,16 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             let idx = self.input_cursor;
             self.input_cursor += 1;
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // 'x' remove button for mergers/sinks (near outer edge)
+                if node.node_type == "merger" || node.node_type == "sink" {
+                    let can_remove = node.input_names.len() > 1;
+                    let btn = egui::Button::new("x").corner_radius(egui::CornerRadius::same(0)).small();
+                    let resp = ui.add_enabled(can_remove, btn);
+                    if resp.clicked() {
+                        self.pending_pin_removes.push((node.id, PinDirection::Input, idx));
+                    }
+                }
+
                 // Rate first (near outer edge for inputs)
                 if let Some(Some(rate)) = node.input_rates.get(idx) {
                     let key = format!("pin:{}:in:{}", node.id, idx);
@@ -335,6 +399,8 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                 } else {
                     ui.label("In");
                 }
+
+
             });
         } else {
             ui.label("In");
@@ -373,6 +439,16 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
 
             let _row = ui.scope_builder(egui::UiBuilder::new().max_rect(anchored_rect), |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // 'x' remove button for custom/game splitters (near outer edge)
+                    if node.node_type == "custom_splitter" || node.node_type == "game_splitter" {
+                        let can_remove = node.output_names.len() > 1;
+                        let btn = egui::Button::new("x").corner_radius(egui::CornerRadius::same(0)).small();
+                        let resp = ui.add_enabled(can_remove, btn);
+                        if resp.clicked() {
+                            self.pending_pin_removes.push((node.id, PinDirection::Output, idx));
+                        }
+                    }
+
                     // Rate first (near outer edge for outputs)
                     if let Some(Some(rate)) = node.output_rates.get(idx) {
                         let key = format!("pin:{}:out:{}", node.id, idx);
@@ -416,6 +492,8 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                         let resp = ui.label("Out");
                         label_rect = Some(resp.rect);
                     }
+
+
                 });
             });
         } else {
@@ -426,10 +504,15 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
 
     fn has_footer(&mut self, node: &EditorNode) -> bool {
         // Show footer if node has building, power info (craft nodes) or sink points
+        // Also show footer for organizer and sink nodes so we can render add buttons
         !node.building_name.is_empty()
             || !node.same_clock_power_str.is_empty()
             || !node.last_underclock_power_str.is_empty()
             || !node.sink_points_str.is_empty()
+            || node.node_type == "custom_splitter"
+            || node.node_type == "game_splitter"
+            || node.node_type == "merger"
+            || node.node_type == "sink"
     }
 
     fn show_footer(
@@ -602,23 +685,61 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                     // 3rd column reserved
                                     ui.horizontal(|ui| {});
                                 }
+
+                                // Add '+' row inside the footer grid so the button aligns under the number fields
+                                // Column alignment: left column -> inputs (merger/sink), right column -> outputs (splitters)
+                                if node.node_type == "merger" {
+                                    self.render_footer_add_button_middle(ui, &node, PinDirection::Input);
+                                } else if node.node_type == "custom_splitter" || node.node_type == "game_splitter" {
+                                    self.render_footer_add_button_middle(ui, &node, PinDirection::Output);
+                                }
                                 ui.end_row();
                             });
                     });
                 }
                 else if !node.sink_points_str.is_empty(){
-                    // Sink node: show points and tooltip with fraction
-                    ui.horizontal(|ui| {
-                        let mut points_str = node.sink_points_str.clone();
-                        // magic number
-                        let text_edit = egui::TextEdit::singleline(&mut points_str).desired_width(44.0);
-                        let response = ui.add_enabled(false, text_edit);
-                        if response.hovered() {
-                            response.on_hover_text(&node.sink_points_fraction_str);
-                        }
-                        ui.label("points");
-                    });
+                    // Sink node: show a '+' in the left column above the points row, then show points and tooltip with fraction
+                    // Render '+' above points in middle column, using shared helper for consistent alignment
+                    self.render_footer_add_button_middle(ui, &node, PinDirection::Input);
+
+                    // Points row aligned to the same columns so the '+' sits above the number field
+                    egui::Grid::new(format!("footer_sink_points:{}", node.id))
+                        .num_columns(3)
+                        .spacing([8.0, 8.0])
+                        .min_col_width(ui.available_width() / 3.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let mut points_str = node.sink_points_str.clone();
+                                // magic number
+                                let text_edit = egui::TextEdit::singleline(&mut points_str).desired_width(44.0);
+                                let response = ui.add_enabled(false, text_edit);
+                                if response.hovered() {
+                                    response.on_hover_text(&node.sink_points_fraction_str);
+                                }
+                                ui.label("points");
+                            });
+                            ui.horizontal(|ui| {});
+                            ui.horizontal(|ui| {});
+                            ui.end_row();
+                        });
                 }
+
+                // If footer didn't contain other content (power/building/sink), show a fallback + in middle column
+                if node.building_name.is_empty()
+                    && node.same_clock_power_str.is_empty()
+                    && node.last_underclock_power_str.is_empty()
+                    && node.sink_points_str.is_empty()
+                {
+                    if node.node_type == "merger" || node.node_type == "custom_splitter" || node.node_type == "game_splitter" {
+                        // use shared helper to render fallback centered +
+                        if node.node_type == "merger" {
+                            self.render_footer_add_button_middle(ui, &node, PinDirection::Input);
+                        } else {
+                            self.render_footer_add_button_middle(ui, &node, PinDirection::Output);
+                        }
+                    }
+                }
+
             });
         }
     }
@@ -1285,6 +1406,59 @@ impl TemplateApp {
                     Err(e) => {
                         self.error_message = format!("Error: {}", e);
                         self.error_time = 3.0;
+                    }
+                }
+            }
+
+            // Process pending pin additions (e.g., + button) collected by the SnarlViewer
+            // Collect nodes that need a UI refresh after mutating the production model
+            let mut nodes_to_refresh: Vec<u64> = Vec::new();
+
+            for (node_id, dir) in self.snarl_viewer.drain_pending_pin_adds() {
+                let res = match dir {
+                    PinDirection::Input => self.production_app.add_input_pin_to_node(node_id),
+                    PinDirection::Output => self.production_app.add_output_pin_to_node(node_id),
+                };
+                if let Err(e) = res {
+                    self.error_message = format!("Error: {}", e);
+                    self.error_time = 3.0;
+                } else {
+                    nodes_to_refresh.push(node_id);
+                }
+            }
+
+            // Process pending pin removals (e.g., x button) collected by the SnarlViewer
+            for (node_id, dir, idx) in self.snarl_viewer.drain_pending_pin_removes() {
+                let res = match dir {
+                    PinDirection::Input => self.production_app.remove_input_pin_from_node(node_id, idx),
+                    PinDirection::Output => self.production_app.remove_output_pin_from_node(node_id, idx),
+                };
+                if let Err(e) = res {
+                    self.error_message = format!("Error: {}", e);
+                    self.error_time = 3.0;
+                } else {
+                    nodes_to_refresh.push(node_id);
+                }
+            }
+
+            // Refresh modified nodes in the snarl widget (do this after mutations to avoid borrow conflicts)
+            for node_id in nodes_to_refresh {
+                let mut new_en = None;
+                // Build new editor node first (immutable borrow)
+                for node_info in self.snarl.nodes_info() {
+                    if node_info.value.id == node_id {
+                        let label = node_info.value.label.clone();
+                        let node_type = node_info.value.node_type.clone();
+                        new_en = Some(self.build_editor_node(node_id, label, node_type));
+                        break;
+                    }
+                }
+                if let Some(en) = new_en {
+                    for node_info in self.snarl.nodes_info_mut() {
+                        if node_info.value.id == node_id {
+                            node_info.value = en.clone();
+                            break;
+                        }
                     }
                 }
             }
