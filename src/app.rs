@@ -121,6 +121,9 @@ struct SnarlViewer {
     output_cursor: usize,
     // Right edge anchor for output rows (per node) to avoid horizontal drift between rows
     output_anchor_right: Option<f32>,
+    // Precomputed per-node output row dimensions (to align all outputs to the same right edge)
+    output_row_width: Option<f32>,
+    output_row_height: Option<f32>,
 
     // Temporary edit buffers for pin rate editing: key -> string
     edit_buffers: HashMap<String, String>,
@@ -199,6 +202,41 @@ impl SnarlViewer {
     }
 }
 
+impl SnarlViewer {
+    /// Compute and cache per-node output row dimensions (width includes circle margin)
+    fn compute_output_row_dims(&mut self, ui: &egui::Ui, node: &EditorNode, size: egui::Vec2) -> (f32, f32) {
+        if self.output_row_width.is_none() {
+            let mut max_label_w = 0.0f32;
+            let mut max_lines = 1usize;
+            for opt in node.output_names.iter() {
+                let orig = opt.as_ref().map(|s| s.as_str()).unwrap_or("Out");
+                let disp = orig.replace(' ', "\n");
+                let mut label_w = 0.0f32;
+                let line_count = disp.matches('\n').count() + 1;
+                for line in disp.split('\n') {
+                    let w = ui
+                        .painter()
+                        .layout_no_wrap(line.to_owned(), egui::FontId::default(), egui::Color32::WHITE)
+                        .size()
+                        .x;
+                    if w > label_w { label_w = w; }
+                }
+                if label_w > max_label_w { max_label_w = label_w; }
+                if line_count > max_lines { max_lines = line_count; }
+            }
+            let gap = 6.0;
+            let circle_margin = size.x * 0.6;
+            let computed_row_width = 88.0 + gap + size.x + gap + max_label_w + circle_margin;
+            let line_height = ui.text_style_height(&egui::TextStyle::Body);
+            let mut computed_row_height = (max_lines as f32) * line_height;
+            if computed_row_height < size.y { computed_row_height = size.y; }
+            self.output_row_width = Some(computed_row_width);
+            self.output_row_height = Some(computed_row_height);
+        }
+        (self.output_row_width.unwrap(), self.output_row_height.unwrap())
+    }
+}
+
 impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
     fn title(&mut self, node: &EditorNode) -> String {
         node.label.clone()
@@ -244,6 +282,9 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
         self.current_node = Some(node.clone());
         self.output_cursor = 0;
         self.output_anchor_right = None;
+        // Reset per-node row size cache
+        self.output_row_width = None;
+        self.output_row_height = None;
         node.output_names.len()
     }
 
@@ -258,7 +299,7 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             let node = node_ref.clone();
             let idx = self.input_cursor;
             self.input_cursor += 1;
-            ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 // Rate first (near outer edge for inputs)
                 if let Some(Some(rate)) = node.input_rates.get(idx) {
                     let key = format!("pin:{}:in:{}", node.id, idx);
@@ -287,9 +328,10 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                     ui.image((*tex, size));
                 }
 
-                // Label closest to center
+                // Label closest to center (display names with spaces -> newlines to match C++)
                 if let Some(Some(name)) = node.input_names.get(idx) {
-                    ui.label(name);
+                    let disp = name.replace(' ', "\n");
+                    ui.label(disp);
                 } else {
                     ui.label("In");
                 }
@@ -316,36 +358,21 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             let mut icon_rect: Option<egui::Rect> = None;
             let mut label_rect: Option<egui::Rect> = None;
 
-            // Compute a fixed row width so all outputs align to the same right edge
-            let label_text = node
-                .output_names
-                .get(idx)
-                .and_then(|o| o.as_ref())
-                .map(|s| s.as_str())
-                .unwrap_or("Out");
-            let label_width = ui
-                .painter()
-                .layout_no_wrap(
-                    label_text.to_owned(),
-                    egui::FontId::default(),
-                    egui::Color32::WHITE,
-                )
-                .size()
-                .x;
-            let gap = 6.0;
-            let row_width = 88.0 + gap + size.x + gap + label_width;
+            // Use cached per-node row dimensions
+            let (row_width, row_height) = self.compute_output_row_dims(ui, &node, size);
 
             // Advance layout but render into an anchored rect so rows don't drift
-            let (slot_rect, _slot_resp) =
-                ui.allocate_exact_size(egui::vec2(row_width, size.y), egui::Sense::hover());
+            let (slot_rect, _slot_resp) = ui.allocate_exact_size(egui::vec2(row_width, row_height), egui::Sense::hover());
             let anchor_right = *self.output_anchor_right.get_or_insert(slot_rect.right());
+            // Leave a right margin for the pin circle so fields don't overlap it
+            let circle_margin = size.x * 0.6;
             let anchored_rect = egui::Rect::from_min_max(
                 egui::pos2(anchor_right - row_width, slot_rect.top()),
-                egui::pos2(anchor_right, slot_rect.bottom()),
+                egui::pos2(anchor_right - circle_margin, slot_rect.bottom()),
             );
 
             let _row = ui.scope_builder(egui::UiBuilder::new().max_rect(anchored_rect), |ui| {
-                ui.horizontal_centered(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Rate first (near outer edge for outputs)
                     if let Some(Some(rate)) = node.output_rates.get(idx) {
                         let key = format!("pin:{}:out:{}", node.id, idx);
@@ -380,9 +407,10 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                         icon_rect = Some(resp.rect);
                     }
 
-                    // Label closest to center
+                    // Label closest to center (display names with spaces -> newlines to match C++)
                     if let Some(Some(name)) = node.output_names.get(idx) {
-                        let resp = ui.label(name);
+                        let disp = name.replace(' ', "\n");
+                        let resp = ui.label(disp);
                         label_rect = Some(resp.rect);
                     } else {
                         let resp = ui.label("Out");
