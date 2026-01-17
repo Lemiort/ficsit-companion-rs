@@ -1821,6 +1821,39 @@ impl TemplateApp {
                 }
             }
 
+            // Delete selected nodes with Delete key
+            if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+                let snarl_widget = egui_snarl::ui::SnarlWidget::new().id(egui::Id::new("production-snarl"));
+                let selected = snarl_widget.get_selected_nodes(ui);
+                if !selected.is_empty() {
+                    let mut deleted = 0usize;
+                    // Delete each selected node from the production model and remove it from the snarl
+                    for node in selected {
+                        if let Some(en) = self.snarl.get_node(node) {
+                            let prod_node_id = en.id;
+                            match self.production_app.delete_node(prod_node_id) {
+                                Ok(()) => {
+                                    // Remove node from snarl if still present
+                                    if self.snarl.get_node(node).is_some() {
+                                        let _ = self.snarl.remove_node(node);
+                                    }
+                                    deleted += 1;
+                                }
+                                Err(e) => {
+                                    self.error_message = format!("Error: {}", e);
+                                    self.error_time = 3.0;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if deleted > 0 {
+                        self.error_message = format!("Deleted {} node(s)", deleted);
+                        self.error_time = 2.0;
+                    }
+                }
+            }
+
             // Process pending group built edits collected by the SnarlViewer
             for (node_id, built) in self.snarl_viewer.drain_pending_built_edits() {
                 match self.production_app.set_node_built_state(node_id, built) {
