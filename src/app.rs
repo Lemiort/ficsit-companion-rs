@@ -1117,13 +1117,19 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
         // Debug: log the attempted connection and the current item types on both pins
         println!("SnarlViewer: connect attempt from {:?} (out_name={:?}) -> {:?} (in_name={:?})", from.id, out_name, to.id, in_name);
 
-        // If both pins have an associated item name and they differ, reject the connection
-        if let (Some(outn), Some(inn)) = (out_name, in_name) {
+        // If both pins have an associated item name and they differ, consider rejection.
+        // However, if the target input already has existing remotes we allow replacing them (and thus changing the type).
+        if let (Some(outn), Some(inn)) = (out_name.clone(), in_name.clone()) {
             if outn != inn {
-                let msg = format!("Cannot connect different item types: '{}' -> '{}'", outn, inn);
-                println!("{}", msg);
-                self.rejected_connection_reason = Some(msg);
-                return;
+                let in_has_remotes = !snarl.in_pin(to.id).remotes.is_empty();
+                if in_has_remotes {
+                    println!("SnarlViewer: types differ ('{}' != '{}') but input has existing remotes — will replace them", outn, inn);
+                } else {
+                    let msg = format!("Cannot connect different item types: '{}' -> '{}'", outn, inn);
+                    println!("{}", msg);
+                    self.rejected_connection_reason = Some(msg);
+                    return;
+                }
             }
         }
 
