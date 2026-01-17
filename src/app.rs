@@ -233,7 +233,12 @@ impl SnarlViewer {
 
 impl SnarlViewer {
     /// Compute and cache per-node output row dimensions (width includes circle margin)
-    fn compute_output_row_dims(&mut self, ui: &egui::Ui, node: &EditorNode, size: egui::Vec2) -> (f32, f32) {
+    fn compute_output_row_dims(
+        &mut self,
+        ui: &egui::Ui,
+        node: &EditorNode,
+        size: egui::Vec2,
+    ) -> (f32, f32) {
         if self.output_row_width.is_none() {
             let mut max_label_w = 0.0f32;
             let mut max_lines = 1usize;
@@ -245,41 +250,65 @@ impl SnarlViewer {
                 for line in disp.split('\n') {
                     let w = ui
                         .painter()
-                        .layout_no_wrap(line.to_owned(), egui::FontId::default(), egui::Color32::WHITE)
+                        .layout_no_wrap(
+                            line.to_owned(),
+                            egui::FontId::default(),
+                            egui::Color32::WHITE,
+                        )
                         .size()
                         .x;
-                    if w > label_w { label_w = w; }
+                    if w > label_w {
+                        label_w = w;
+                    }
                 }
-                if label_w > max_label_w { max_label_w = label_w; }
-                if line_count > max_lines { max_lines = line_count; }
+                if label_w > max_label_w {
+                    max_label_w = label_w;
+                }
+                if line_count > max_lines {
+                    max_lines = line_count;
+                }
             }
             let gap = 6.0;
             let circle_margin = size.x * 0.6;
             let computed_row_width = 88.0 + gap + size.x + gap + max_label_w + circle_margin;
             let line_height = ui.text_style_height(&egui::TextStyle::Body);
             let mut computed_row_height = (max_lines as f32) * line_height;
-            if computed_row_height < size.y { computed_row_height = size.y; }
+            if computed_row_height < size.y {
+                computed_row_height = size.y;
+            }
             self.output_row_width = Some(computed_row_width);
             self.output_row_height = Some(computed_row_height);
         }
-        (self.output_row_width.unwrap(), self.output_row_height.unwrap())
+        (
+            self.output_row_width.unwrap(),
+            self.output_row_height.unwrap(),
+        )
     }
 
     // Synchronize merger/splitter pin types for a node: if any remote connections exist,
     // pick the first remote's item name and set all pins of that direction to it.
     // If there are no connections, clear the names.
-    fn sync_merger_splitter(&mut self, snarl: &mut egui_snarl::Snarl<EditorNode>, node_id: egui_snarl::NodeId) {
+    fn sync_merger_splitter(
+        &mut self,
+        snarl: &mut egui_snarl::Snarl<EditorNode>,
+        node_id: egui_snarl::NodeId,
+    ) {
         // Read-only pass: determine chosen item name (avoid simultaneous mutable/immutable borrows of snarl)
         if let Some(node_ref) = snarl.get_node(node_id) {
             match node_ref.node_type.as_str() {
                 "merger" => {
                     let mut chosen: Option<String> = None;
                     for input_idx in 0..node_ref.input_names.len() {
-                        let in_id = egui_snarl::InPinId { node: node_id, input: input_idx };
+                        let in_id = egui_snarl::InPinId {
+                            node: node_id,
+                            input: input_idx,
+                        };
                         let in_pin = snarl.in_pin(in_id);
                         if let Some(remote) = in_pin.remotes.first() {
                             if let Some(remote_node) = snarl.get_node(remote.node) {
-                                if let Some(Some(name)) = remote_node.output_names.get(remote.output) {
+                                if let Some(Some(name)) =
+                                    remote_node.output_names.get(remote.output)
+                                {
                                     chosen = Some(name.clone());
                                     break;
                                 }
@@ -308,8 +337,14 @@ impl SnarlViewer {
                             node_mut.item_type_icon = self.icon_map.get(&name).copied();
 
                             // Debug
-                            println!("SnarlViewer: set item_type '{}' on node {} ({})", name, node_mut.id, node_mut.node_type);
-                            println!("SnarlViewer: propagated '{}' to outputs and set footer icon {:?}", name, node_mut.item_type_icon);
+                            println!(
+                                "SnarlViewer: set item_type '{}' on node {} ({})",
+                                name, node_mut.id, node_mut.node_type
+                            );
+                            println!(
+                                "SnarlViewer: propagated '{}' to outputs and set footer icon {:?}",
+                                name, node_mut.item_type_icon
+                            );
                         } else {
                             node_mut.item_type = None;
                             for slot in node_mut.input_names.iter_mut() {
@@ -324,7 +359,10 @@ impl SnarlViewer {
                             node_mut.item_type_icon = None;
 
                             // Debug
-                            println!("SnarlViewer: cleared item_type on node {} ({})", node_mut.id, node_mut.node_type);
+                            println!(
+                                "SnarlViewer: cleared item_type on node {} ({})",
+                                node_mut.id, node_mut.node_type
+                            );
                         }
 
                         // If this node is currently being rendered, update the cached clone so the footer shows changes immediately
@@ -338,10 +376,19 @@ impl SnarlViewer {
                 "sink" => {
                     // Sinks should NOT have a node-level item_type — pins carry their own types.
                     // Collect per-input chosen item names (read-only pass)
-                    println!("SnarlViewer: checking sink node {} ({}) inputs (count={})", node_ref.id, node_ref.node_type, node_ref.input_names.len());
-                    let mut chosen_per_input: Vec<Option<String>> = Vec::with_capacity(node_ref.input_names.len());
+                    println!(
+                        "SnarlViewer: checking sink node {} ({}) inputs (count={})",
+                        node_ref.id,
+                        node_ref.node_type,
+                        node_ref.input_names.len()
+                    );
+                    let mut chosen_per_input: Vec<Option<String>> =
+                        Vec::with_capacity(node_ref.input_names.len());
                     for input_idx in 0..node_ref.input_names.len() {
-                        let in_id = egui_snarl::InPinId { node: node_id, input: input_idx };
+                        let in_id = egui_snarl::InPinId {
+                            node: node_id,
+                            input: input_idx,
+                        };
                         let in_pin = snarl.in_pin(in_id);
                         if in_pin.remotes.is_empty() {
                             println!("  input[{}]: no remotes", input_idx);
@@ -351,14 +398,23 @@ impl SnarlViewer {
                             let mut found: Option<String> = None;
                             for r in in_pin.remotes.iter() {
                                 if let Some(remote_node) = snarl.get_node(r.node) {
-                                    let name_opt = remote_node.output_names.get(r.output).and_then(|o| o.clone());
-                                    println!("  input[{}] remote -> node {:?} output {} name={:?}", input_idx, r.node, r.output, name_opt);
+                                    let name_opt = remote_node
+                                        .output_names
+                                        .get(r.output)
+                                        .and_then(|o| o.clone());
+                                    println!(
+                                        "  input[{}] remote -> node {:?} output {} name={:?}",
+                                        input_idx, r.node, r.output, name_opt
+                                    );
                                     if let Some(n) = name_opt {
                                         found = Some(n);
                                         break;
                                     }
                                 } else {
-                                    println!("  input[{}] remote -> node {:?} output {} (node not found)", input_idx, r.node, r.output);
+                                    println!(
+                                        "  input[{}] remote -> node {:?} output {} (node not found)",
+                                        input_idx, r.node, r.output
+                                    );
                                 }
                             }
                             chosen_per_input.push(found);
@@ -370,11 +426,19 @@ impl SnarlViewer {
                         for (idx, chosen_opt) in chosen_per_input.into_iter().enumerate() {
                             if idx < node_mut.input_names.len() {
                                 node_mut.input_names[idx] = chosen_opt.clone();
-                                node_mut.input_icons[idx] = chosen_opt.as_ref().and_then(|n| self.icon_map.get(n).copied());
+                                node_mut.input_icons[idx] = chosen_opt
+                                    .as_ref()
+                                    .and_then(|n| self.icon_map.get(n).copied());
                                 if let Some(n) = chosen_opt {
-                                    println!("SnarlViewer: set input[{}] name='{}' on sink node {}", idx, n, node_mut.id);
+                                    println!(
+                                        "SnarlViewer: set input[{}] name='{}' on sink node {}",
+                                        idx, n, node_mut.id
+                                    );
                                 } else {
-                                    println!("SnarlViewer: cleared input[{}] name on sink node {}", idx, node_mut.id);
+                                    println!(
+                                        "SnarlViewer: cleared input[{}] name on sink node {}",
+                                        idx, node_mut.id
+                                    );
                                 }
                             }
                         }
@@ -383,7 +447,10 @@ impl SnarlViewer {
                         node_mut.item_type = None;
                         node_mut.item_type_icon = None;
 
-                        println!("SnarlViewer: sink node {} ({}) retains per-pin types; node-level item_type cleared", node_mut.id, node_mut.node_type);
+                        println!(
+                            "SnarlViewer: sink node {} ({}) retains per-pin types; node-level item_type cleared",
+                            node_mut.id, node_mut.node_type
+                        );
 
                         // Update cached current node if needed so UI reflects cleared state immediately
                         if let Some(cur) = self.current_node.as_mut() {
@@ -395,24 +462,43 @@ impl SnarlViewer {
                 }
                 "custom_splitter" | "game_splitter" => {
                     let mut chosen: Option<String> = None;
-                    println!("SnarlViewer: examining splitter node {:?} inputs={:?} outputs={:?}", node_id, node_ref.input_names, node_ref.output_names);
+                    println!(
+                        "SnarlViewer: examining splitter node {:?} inputs={:?} outputs={:?}",
+                        node_id, node_ref.input_names, node_ref.output_names
+                    );
 
                     // First try: check inputs' remotes (source -> splitter input), prefer remote's output name
                     for input_idx in 0..node_ref.input_names.len() {
-                        let in_id = egui_snarl::InPinId { node: node_id, input: input_idx };
+                        let in_id = egui_snarl::InPinId {
+                            node: node_id,
+                            input: input_idx,
+                        };
                         let in_pin = snarl.in_pin(in_id);
                         if let Some(remote) = in_pin.remotes.first() {
                             if let Some(remote_node) = snarl.get_node(remote.node) {
-                                if let Some(Some(name)) = remote_node.output_names.get(remote.output) {
+                                if let Some(Some(name)) =
+                                    remote_node.output_names.get(remote.output)
+                                {
                                     chosen = Some(name.clone());
-                                    println!("SnarlViewer: splitter candidate from input[{}] remote node {:?} output {} = {:?}", input_idx, remote.node, remote.output, name);
+                                    println!(
+                                        "SnarlViewer: splitter candidate from input[{}] remote node {:?} output {} = {:?}",
+                                        input_idx, remote.node, remote.output, name
+                                    );
                                     break;
-                                } else if let Some(name) = remote_node.output_names.iter().find_map(|o| o.clone()) {
+                                } else if let Some(name) =
+                                    remote_node.output_names.iter().find_map(|o| o.clone())
+                                {
                                     chosen = Some(name.clone());
-                                    println!("SnarlViewer: splitter fallback from input[{}] remote node {:?} any output = {:?}", input_idx, remote.node, name);
+                                    println!(
+                                        "SnarlViewer: splitter fallback from input[{}] remote node {:?} any output = {:?}",
+                                        input_idx, remote.node, name
+                                    );
                                     break;
                                 } else {
-                                    println!("SnarlViewer: splitter input[{}] remote node {:?} had no output names", input_idx, remote.node);
+                                    println!(
+                                        "SnarlViewer: splitter input[{}] remote node {:?} had no output names",
+                                        input_idx, remote.node
+                                    );
                                 }
                             }
                         } else {
@@ -423,27 +509,53 @@ impl SnarlViewer {
                     // Fallback: inspect outputs' remotes (downstream nodes)
                     if chosen.is_none() {
                         for output_idx in 0..node_ref.output_names.len() {
-                            let out_id = egui_snarl::OutPinId { node: node_id, output: output_idx };
+                            let out_id = egui_snarl::OutPinId {
+                                node: node_id,
+                                output: output_idx,
+                            };
                             let out_pin = snarl.out_pin(out_id);
                             if let Some(remote) = out_pin.remotes.first() {
                                 if let Some(remote_node) = snarl.get_node(remote.node) {
-                                    println!("SnarlViewer: splitter remote node {:?} input_names={:?} output_names={:?}", remote.node, remote_node.input_names, remote_node.output_names);
+                                    println!(
+                                        "SnarlViewer: splitter remote node {:?} input_names={:?} output_names={:?}",
+                                        remote.node,
+                                        remote_node.input_names,
+                                        remote_node.output_names
+                                    );
                                     // Prefer the remote node's input pin name (the splitter feeds that input),
                                     // but fall back to any input name, then any output name on remote node.
                                     let mut found_name: Option<String> = None;
-                                    if let Some(Some(name)) = remote_node.input_names.get(remote.input) {
+                                    if let Some(Some(name)) =
+                                        remote_node.input_names.get(remote.input)
+                                    {
                                         found_name = Some(name.clone());
-                                        println!("SnarlViewer: splitter candidate from remote node {:?} input {} = {:?}", remote.node, remote.input, name);
-                                    } else if let Some(name) = remote_node.input_names.iter().find_map(|o| o.clone()) {
+                                        println!(
+                                            "SnarlViewer: splitter candidate from remote node {:?} input {} = {:?}",
+                                            remote.node, remote.input, name
+                                        );
+                                    } else if let Some(name) =
+                                        remote_node.input_names.iter().find_map(|o| o.clone())
+                                    {
                                         // fall back to any input name on remote node
                                         found_name = Some(name.clone());
-                                        println!("SnarlViewer: splitter fallback from remote node {:?} any input = {:?}", remote.node, name);
-                                    } else if let Some(name) = remote_node.output_names.iter().find_map(|o| o.clone()) {
+                                        println!(
+                                            "SnarlViewer: splitter fallback from remote node {:?} any input = {:?}",
+                                            remote.node, name
+                                        );
+                                    } else if let Some(name) =
+                                        remote_node.output_names.iter().find_map(|o| o.clone())
+                                    {
                                         // last resort: pick any output name on remote node
                                         found_name = Some(name.clone());
-                                        println!("SnarlViewer: splitter fallback from remote node {:?} any output = {:?}", remote.node, name);
+                                        println!(
+                                            "SnarlViewer: splitter fallback from remote node {:?} any output = {:?}",
+                                            remote.node, name
+                                        );
                                     } else {
-                                        println!("SnarlViewer: splitter remote node {:?} had no input/output names", remote.node);
+                                        println!(
+                                            "SnarlViewer: splitter remote node {:?} had no input/output names",
+                                            remote.node
+                                        );
                                     }
                                     if let Some(name) = found_name {
                                         chosen = Some(name);
@@ -457,7 +569,10 @@ impl SnarlViewer {
                     }
 
                     if chosen.is_none() {
-                        println!("SnarlViewer: no chosen name for splitter node {:?} after inspection", node_id);
+                        println!(
+                            "SnarlViewer: no chosen name for splitter node {:?} after inspection",
+                            node_id
+                        );
                     }
 
                     if let Some(node_mut) = snarl.get_node_mut(node_id) {
@@ -482,8 +597,14 @@ impl SnarlViewer {
                             node_mut.item_type_icon = self.icon_map.get(&name).copied();
 
                             // Debug
-                            println!("SnarlViewer: set item_type '{}' on node {} ({})", name, node_mut.id, node_mut.node_type);
-                            println!("SnarlViewer: propagated '{}' to inputs/outputs and set footer icon {:?}", name, node_mut.item_type_icon);
+                            println!(
+                                "SnarlViewer: set item_type '{}' on node {} ({})",
+                                name, node_mut.id, node_mut.node_type
+                            );
+                            println!(
+                                "SnarlViewer: propagated '{}' to inputs/outputs and set footer icon {:?}",
+                                name, node_mut.item_type_icon
+                            );
                         } else {
                             node_mut.item_type = None;
 
@@ -504,7 +625,10 @@ impl SnarlViewer {
                             node_mut.item_type_icon = None;
 
                             // Debug
-                            println!("SnarlViewer: cleared item_type on node {} ({})", node_mut.id, node_mut.node_type);
+                            println!(
+                                "SnarlViewer: cleared item_type on node {} ({})",
+                                node_mut.id, node_mut.node_type
+                            );
                         }
 
                         // If this node is currently being rendered, update the cached clone so the footer shows changes immediately
@@ -527,11 +651,20 @@ impl SnarlViewer {
 
     // Helper to render a '+' in the footer aligned to a column depending on direction
     // Input -> column 1 (left) | Output -> column 3 (right)
-    fn render_footer_add_button_middle(&mut self, ui: &mut egui::Ui, node: &EditorNode, dir: PinDirection) {
-        egui::Grid::new(format!("footer_add_col:{}:{}", node.id, match dir {
-            PinDirection::Input => "in",
-            PinDirection::Output => "out",
-        }))
+    fn render_footer_add_button_middle(
+        &mut self,
+        ui: &mut egui::Ui,
+        node: &EditorNode,
+        dir: PinDirection,
+    ) {
+        egui::Grid::new(format!(
+            "footer_add_col:{}:{}",
+            node.id,
+            match dir {
+                PinDirection::Input => "in",
+                PinDirection::Output => "out",
+            }
+        ))
         .num_columns(3)
         .spacing([8.0, 8.0])
         .min_col_width(ui.available_width() / 3.0)
@@ -541,7 +674,14 @@ impl SnarlViewer {
                     // Place in first column with left inset
                     ui.horizontal(|ui| {
                         ui.add_space(Self::FOOTER_ADD_INSET);
-                        if ui.add(egui::Button::new("+").corner_radius(egui::CornerRadius::same(0)).small()).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new("+")
+                                    .corner_radius(egui::CornerRadius::same(0))
+                                    .small(),
+                            )
+                            .clicked()
+                        {
                             self.pending_pin_adds.push((node.id, dir));
                         }
                     });
@@ -554,7 +694,14 @@ impl SnarlViewer {
                     // Place in third column with right inset using RTL layout
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(Self::FOOTER_ADD_INSET);
-                        if ui.add(egui::Button::new("+").corner_radius(egui::CornerRadius::same(0)).small()).clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new("+")
+                                    .corner_radius(egui::CornerRadius::same(0))
+                                    .small(),
+                            )
+                            .clicked()
+                        {
                             self.pending_pin_adds.push((node.id, dir));
                         }
                     });
@@ -631,10 +778,13 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                 // 'x' remove button for mergers/sinks (near outer edge)
                 if node.node_type == "merger" || node.node_type == "sink" {
                     let can_remove = node.input_names.len() > 1;
-                    let btn = egui::Button::new("x").corner_radius(egui::CornerRadius::same(0)).small();
+                    let btn = egui::Button::new("x")
+                        .corner_radius(egui::CornerRadius::same(0))
+                        .small();
                     let resp = ui.add_enabled(can_remove, btn);
                     if resp.clicked() {
-                        self.pending_pin_removes.push((node.id, PinDirection::Input, idx));
+                        self.pending_pin_removes
+                            .push((node.id, PinDirection::Input, idx));
                     }
                 }
 
@@ -676,7 +826,10 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                 } else {
                     // Default behavior for non-sink nodes
                     // For merger/splitter nodes we intentionally hide per-pin icons and labels
-                    if node.node_type != "merger" && node.node_type != "custom_splitter" && node.node_type != "game_splitter" {
+                    if node.node_type != "merger"
+                        && node.node_type != "custom_splitter"
+                        && node.node_type != "game_splitter"
+                    {
                         if let Some(Some(tex)) = node.input_icons.get(idx) {
                             // Use the image widget to draw the texture (lets egui handle clipping/alpha)
                             ui.image((*tex, size));
@@ -691,8 +844,6 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                         }
                     }
                 }
-
-
             });
         }
         egui_snarl::ui::PinInfo::circle()
@@ -718,7 +869,8 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             let (row_width, row_height) = self.compute_output_row_dims(ui, &node, size);
 
             // Advance layout but render into an anchored rect so rows don't drift
-            let (slot_rect, _slot_resp) = ui.allocate_exact_size(egui::vec2(row_width, row_height), egui::Sense::hover());
+            let (slot_rect, _slot_resp) =
+                ui.allocate_exact_size(egui::vec2(row_width, row_height), egui::Sense::hover());
             let anchor_right = *self.output_anchor_right.get_or_insert(slot_rect.right());
             // Leave a right margin for the pin circle so fields don't overlap it
             let circle_margin = size.x * 0.6;
@@ -732,10 +884,13 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                     // 'x' remove button for custom/game splitters (near outer edge)
                     if node.node_type == "custom_splitter" || node.node_type == "game_splitter" {
                         let can_remove = node.output_names.len() > 1;
-                        let btn = egui::Button::new("x").corner_radius(egui::CornerRadius::same(0)).small();
+                        let btn = egui::Button::new("x")
+                            .corner_radius(egui::CornerRadius::same(0))
+                            .small();
                         let resp = ui.add_enabled(can_remove, btn);
                         if resp.clicked() {
-                            self.pending_pin_removes.push((node.id, PinDirection::Output, idx));
+                            self.pending_pin_removes
+                                .push((node.id, PinDirection::Output, idx));
                         }
                     }
 
@@ -767,7 +922,10 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                     }
 
                     // For merger/splitter nodes we intentionally hide per-pin icons and labels
-                    if node.node_type != "merger" && node.node_type != "custom_splitter" && node.node_type != "game_splitter" {
+                    if node.node_type != "merger"
+                        && node.node_type != "custom_splitter"
+                        && node.node_type != "game_splitter"
+                    {
                         // Icon next (inward)
                         if let Some(Some(tex)) = node.output_icons.get(idx) {
                             // Use widget-based image drawing
@@ -785,11 +943,9 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                             label_rect = Some(resp.rect);
                         }
                     }
-
-
                 });
             });
-        } 
+        }
         egui_snarl::ui::PinInfo::circle()
     }
 
@@ -823,7 +979,7 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                 } else {
                     node.last_underclock_power_str.clone()
                 };
-                if !power_value.is_empty() || !node.building_name.is_empty(){
+                if !power_value.is_empty() || !node.building_name.is_empty() {
                     ui.horizontal(|ui| {
                         // Power sizes (number field + spacing + MW label)
                         let power_field_width = ui
@@ -869,7 +1025,7 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                     ui.horizontal(|ui| {});
                                 }
 
-                                                // Column 2: building (center column occupies the center of the footer), content left-to-right
+                                // Column 2: building (center column occupies the center of the footer), content left-to-right
                                 if let Some(name) = node.item_type.as_ref() {
                                     ui.horizontal(|ui| {
                                         // Item icon if available
@@ -992,15 +1148,24 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                 // Add '+' row inside the footer grid so the button aligns under the number fields
                                 // Column alignment: left column -> inputs (merger/sink), right column -> outputs (splitters)
                                 if node.node_type == "merger" {
-                                    self.render_footer_add_button_middle(ui, &node, PinDirection::Input);
-                                } else if node.node_type == "custom_splitter" || node.node_type == "game_splitter" {
-                                    self.render_footer_add_button_middle(ui, &node, PinDirection::Output);
+                                    self.render_footer_add_button_middle(
+                                        ui,
+                                        &node,
+                                        PinDirection::Input,
+                                    );
+                                } else if node.node_type == "custom_splitter"
+                                    || node.node_type == "game_splitter"
+                                {
+                                    self.render_footer_add_button_middle(
+                                        ui,
+                                        &node,
+                                        PinDirection::Output,
+                                    );
                                 }
                                 ui.end_row();
                             });
                     });
-                }
-                else if !node.sink_points_str.is_empty(){
+                } else if !node.sink_points_str.is_empty() {
                     // Sink node: show a '+' in the left column above the points row, then show points and tooltip with fraction
                     // Render '+' above points in middle column, using shared helper for consistent alignment
                     self.render_footer_add_button_middle(ui, &node, PinDirection::Input);
@@ -1028,7 +1193,8 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                 ui.horizontal(|ui| {
                                     let mut points_str = node.sink_points_str.clone();
                                     // magic number
-                                    let text_edit = egui::TextEdit::singleline(&mut points_str).desired_width(44.0);
+                                    let text_edit = egui::TextEdit::singleline(&mut points_str)
+                                        .desired_width(44.0);
                                     let response = ui.add_enabled(false, text_edit);
                                     if response.hovered() {
                                         response.on_hover_text(&node.sink_points_fraction_str);
@@ -1048,7 +1214,10 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                     && node.last_underclock_power_str.is_empty()
                     && node.sink_points_str.is_empty()
                 {
-                    if node.node_type == "merger" || node.node_type == "custom_splitter" || node.node_type == "game_splitter" {
+                    if node.node_type == "merger"
+                        || node.node_type == "custom_splitter"
+                        || node.node_type == "game_splitter"
+                    {
                         // Render a three-column grid so we can center the item_type if present and still show + in the side column
                         egui::Grid::new(format!("footer_fallback_grid:{}", node.id))
                             .num_columns(3)
@@ -1059,8 +1228,16 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                 if node.node_type == "merger" {
                                     ui.horizontal(|ui| {
                                         ui.add_space(Self::FOOTER_ADD_INSET);
-                                        if ui.add(egui::Button::new("+").corner_radius(egui::CornerRadius::same(0)).small()).clicked() {
-                                            self.pending_pin_adds.push((node.id, PinDirection::Input));
+                                        if ui
+                                            .add(
+                                                egui::Button::new("+")
+                                                    .corner_radius(egui::CornerRadius::same(0))
+                                                    .small(),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.pending_pin_adds
+                                                .push((node.id, PinDirection::Input));
                                         }
                                     });
                                 } else {
@@ -1086,12 +1263,23 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
 
                                 // Right column (output + for splitters)
                                 if node.node_type != "merger" {
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        ui.add_space(Self::FOOTER_ADD_INSET);
-                                        if ui.add(egui::Button::new("+").corner_radius(egui::CornerRadius::same(0)).small()).clicked() {
-                                            self.pending_pin_adds.push((node.id, PinDirection::Output));
-                                        }
-                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.add_space(Self::FOOTER_ADD_INSET);
+                                            if ui
+                                                .add(
+                                                    egui::Button::new("+")
+                                                        .corner_radius(egui::CornerRadius::same(0))
+                                                        .small(),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.pending_pin_adds
+                                                    .push((node.id, PinDirection::Output));
+                                            }
+                                        },
+                                    );
                                 } else {
                                     ui.horizontal(|ui| {});
                                 }
@@ -1100,22 +1288,31 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                             });
                     }
                 }
-
             });
         }
     }
 
-    fn connect(&mut self, from: &egui_snarl::OutPin, to: &egui_snarl::InPin, snarl: &mut egui_snarl::Snarl<EditorNode>) {
+    fn connect(
+        &mut self,
+        from: &egui_snarl::OutPin,
+        to: &egui_snarl::InPin,
+        snarl: &mut egui_snarl::Snarl<EditorNode>,
+    ) {
         // Lookup the output and input names (if any) from the corresponding nodes
-        let out_name = snarl.get_node(from.id.node)
+        let out_name = snarl
+            .get_node(from.id.node)
             .and_then(|n| n.output_names.get(from.id.output))
             .and_then(|opt| opt.clone());
-        let in_name = snarl.get_node(to.id.node)
+        let in_name = snarl
+            .get_node(to.id.node)
             .and_then(|n| n.input_names.get(to.id.input))
             .and_then(|opt| opt.clone());
 
         // Debug: log the attempted connection and the current item types on both pins
-        println!("SnarlViewer: connect attempt from {:?} (out_name={:?}) -> {:?} (in_name={:?})", from.id, out_name, to.id, in_name);
+        println!(
+            "SnarlViewer: connect attempt from {:?} (out_name={:?}) -> {:?} (in_name={:?})",
+            from.id, out_name, to.id, in_name
+        );
 
         // If both pins have an associated item name and they differ, consider rejection.
         // However, if the target input already has existing remotes we allow replacing them (and thus changing the type).
@@ -1123,9 +1320,15 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             if outn != inn {
                 let in_has_remotes = !snarl.in_pin(to.id).remotes.is_empty();
                 if in_has_remotes {
-                    println!("SnarlViewer: types differ ('{}' != '{}') but input has existing remotes — will replace them", outn, inn);
+                    println!(
+                        "SnarlViewer: types differ ('{}' != '{}') but input has existing remotes — will replace them",
+                        outn, inn
+                    );
                 } else {
-                    let msg = format!("Cannot connect different item types: '{}' -> '{}'", outn, inn);
+                    let msg = format!(
+                        "Cannot connect different item types: '{}' -> '{}'",
+                        outn, inn
+                    );
                     println!("{}", msg);
                     self.rejected_connection_reason = Some(msg);
                     return;
@@ -1159,7 +1362,10 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
         }
 
         if out_replacements + in_replacements > 0 {
-            println!("Replaced {} existing connection(s)", out_replacements + in_replacements);
+            println!(
+                "Replaced {} existing connection(s)",
+                out_replacements + in_replacements
+            );
         }
 
         // Finally perform the new connection
