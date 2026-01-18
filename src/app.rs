@@ -148,14 +148,41 @@ struct SnarlViewer {
     pending_pin_adds: Vec<(u64, crate::pin::PinDirection)>,
     pending_pin_removes: Vec<(u64, crate::pin::PinDirection, usize)>,
 
+    // Pending dropped wire action recorded by show_dropped_wire_menu / show_graph_menu
+    pending_dropped_wire: Option<PendingDroppedWire>,
+
     // Map of item name -> TextureId supplied by the app so the viewer can resolve icons immediately
     icon_map: std::collections::HashMap<String, egui::TextureId>,
+
+    // Recipes & context filter for legacy-style graph add menu
+    pub recipes: Vec<std::rc::Rc<crate::recipe::Recipe>>,
+    pub context_menu_recipe_filter: String,
+    pub recipe_checkbox_state: std::collections::HashMap<String, bool>,
 
     // Whether to display same-clock or last-underclock in UI
     pub power_equal_clocks: bool,
 
     // Last reason a connection was rejected by the viewer (displayed as error_message by TemplateApp)
     pub rejected_connection_reason: Option<String>,
+}
+
+// Pending dropped wire types (used by viewer to record actions for TemplateApp to execute)
+#[derive(Clone, Debug)]
+pub enum DroppedWireChoice {
+    Merger,
+    CustomSplitter,
+    GameSplitter,
+    Sink,
+    Craft(Option<String>),
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingDroppedWire {
+    pub pos: egui::Pos2,
+    pub src_outs: Option<Vec<egui_snarl::OutPinId>>,
+    pub src_ins: Option<Vec<egui_snarl::InPinId>>,
+    pub src_item_name: Option<String>,
+    pub choice: DroppedWireChoice,
 }
 
 impl SnarlViewer {
@@ -180,6 +207,10 @@ impl SnarlViewer {
 
     fn drain_pending_pin_removes(&mut self) -> Vec<(u64, crate::pin::PinDirection, usize)> {
         std::mem::take(&mut self.pending_pin_removes)
+    }
+
+    fn drain_pending_dropped_wire(&mut self) -> Option<PendingDroppedWire> {
+        self.pending_dropped_wire.take()
     }
 
     // Render a fractional number input similar to C++ RenderInputText.
@@ -228,6 +259,208 @@ impl SnarlViewer {
         }
 
         response
+    }
+
+    /// Shared add-node menu renderer for both graph menu and dropped-wire menu
+    fn draw_add_node_menu_contents(&mut self, pos: egui::Pos2, ui: &mut egui::Ui, filter_item: Option<&str>, filter_by_output: bool) -> Option<DroppedWireChoice> {
+        // Cap menu width to avoid unlimited expansion and match legacy popup
+        ui.set_max_width(350.0);
+        ui.spacing_mut().item_spacing.y = 0.0;
+
+        // Helper to render a simple menu item (hover highlight + click)
+        let mut menu_item = |ui: &mut egui::Ui, label: &str, tooltip: &str| -> bool {
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                egui::Sense::click(),
+            );
+            if response.hovered() {
+                ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, ui.visuals().widgets.hovered.bg_fill);
+            }
+            let mut child_ui = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center), None);
+            child_ui.spacing_mut().button_padding = egui::vec2(8.0, 0.0);
+            child_ui.style_mut().interaction.selectable_labels = false;
+            let text_response = child_ui.label(label);
+            if !tooltip.is_empty() {
+                text_response.on_hover_text(tooltip);
+            }
+            response.clicked()
+        };
+
+        if menu_item(ui, "Merger", "") {
+            return Some(DroppedWireChoice::Merger);
+        }
+
+        if menu_item(ui, "Splitter*", "Splitter with independent output rates") {
+            return Some(DroppedWireChoice::CustomSplitter);
+        }
+
+        if menu_item(ui, "Splitter", "Splitter with equal output rates") {
+            return Some(DroppedWireChoice::GameSplitter);
+        }
+
+        if menu_item(ui, "Sink", "") {
+            return Some(DroppedWireChoice::Sink);
+        }
+
+        ui.separator();
+
+        // Recipe filter box (disabled when filter_item is provided)
+        if filter_item.is_none() {
+            let filter_response = ui.add(egui::TextEdit::singleline(&mut self.context_menu_recipe_filter).hint_text("Filter..."));
+            if ui.memory(|mem| mem.focused().is_none()) {
+                filter_response.request_focus();
+            }
+            ui.separator();
+        } else {
+            if filter_by_output {
+                ui.label(format!("Recipes with output: {}", filter_item.unwrap()));
+            } else {
+                ui.label(format!("Recipes with input: {}", filter_item.unwrap()));
+            }
+            ui.separator();
+        }
+
+        // Show recipes (use cached list from TemplateApp)
+        let all_recipes: Vec<_> = self
+            .recipes
+            .iter()
+            .map(|r| r.clone())
+            .filter(|r| {
+                if let Some(item) = filter_item {
+                    // Only recipes that include the specified item as an input or output depending on the drop direction
+                    if filter_by_output {
+                        r.outs.iter().any(|out| out.item_name == item)
+                    } else {
+                        r.ins.iter().any(|inp| inp.item_name == item)
+                    }
+                } else if self.context_menu_recipe_filter.is_empty() {
+                    true
+                } else {
+                    r.name.to_lowercase().contains(&self.context_menu_recipe_filter.to_lowercase())
+                        || r.display_name
+                            .to_lowercase()
+                            .contains(&self.context_menu_recipe_filter.to_lowercase())
+                }
+            })
+            .take(20)
+            .collect();
+
+        if all_recipes.is_empty() && !self.recipes.is_empty() {
+            ui.label("No matching recipes");
+        } else if self.recipes.is_empty() {
+            ui.colored_label(egui::Color32::RED, "⚠ No game data loaded!");
+            ui.label("Check assets/satisfactory.json");
+        } else {
+            let mut chosen: Option<DroppedWireChoice> = None;
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .max_height(300.0)
+                .show(ui, |ui| {
+                    // Layout sizes
+                    let menu_width = ui.available_width();
+                    let checkbox_column_width = ui.spacing().interact_size.y;
+                    let icon_size = egui::Vec2::splat(ui.text_style_height(&egui::TextStyle::Body));
+                    let mut max_inputs = 0usize;
+                    let mut max_outputs = 0usize;
+                    let mut any_arrow = false;
+                    for recipe in all_recipes.iter() {
+                        let ins = recipe.ins.len().min(4);
+                        let outs = recipe.outs.len().min(4);
+                        max_inputs = max_inputs.max(ins);
+                        max_outputs = max_outputs.max(outs);
+                        any_arrow |= ins > 0 && outs > 0;
+                    }
+                    let max_icons = max_inputs + max_outputs;
+                    let arrow_width = if any_arrow { icon_size.x } else { 0.0 };
+                    let scroll_style = &ui.style().spacing.scroll;
+                    let scroll_bar_width = if scroll_style.floating {
+                        scroll_style.bar_width
+                    } else {
+                        scroll_style.allocated_width()
+                    };
+                    let icon_column_width = (max_icons as f32) * icon_size.x + arrow_width + scroll_bar_width;
+                    let name_column_width = (menu_width - checkbox_column_width - icon_column_width).max(80.0);
+
+                    egui::Grid::new("recipe_grid")
+                        .spacing([0.0, 0.0])
+                        .num_columns(3)
+                        .show(ui, |ui| {
+                            for recipe in all_recipes {
+                                // Checkbox for alternate recipes
+                                if recipe.alternate {
+                                    let checkbox_state = self.recipe_checkbox_state.entry(recipe.name.clone()).or_insert(true);
+                                    let mut checked = *checkbox_state;
+                                    if ui.checkbox(&mut checked, "").changed() {
+                                        self.recipe_checkbox_state.insert(recipe.name.clone(), checked);
+                                    }
+                                } else {
+                                    ui.allocate_space(egui::vec2(checkbox_column_width, checkbox_column_width));
+                                }
+
+                                // Recipe name column clickable
+                                let (rect, response) = ui.allocate_exact_size(
+                                    egui::vec2(name_column_width, ui.spacing().interact_size.y),
+                                    egui::Sense::click(),
+                                );
+                                if response.hovered() {
+                                    ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, ui.visuals().widgets.hovered.bg_fill);
+                                }
+                                let mut child_ui = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center), None);
+                                child_ui.spacing_mut().button_padding = egui::vec2(8.0, 0.0);
+                                child_ui.style_mut().interaction.selectable_labels = false;
+                                let _text_response = child_ui.label(&recipe.display_name);
+
+                                ui.horizontal(|ui| {
+                                    ui.set_width(icon_column_width);
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    ui.style_mut().interaction.selectable_labels = false;
+
+                                    // Inputs icons
+                                    for inp in recipe.ins.iter().take(4) {
+                                        if let Some(tex) = self.icon_map.get(&inp.item_name) {
+                                            let _ = ui.image((*tex, icon_size));
+                                        }
+                                    }
+
+                                    if !recipe.ins.is_empty() && !recipe.outs.is_empty() {
+                                        ui.label("-->");
+                                    }
+
+                                    // Outputs icons
+                                    for out in recipe.outs.iter().take(4) {
+                                        if let Some(tex) = self.icon_map.get(&out.item_name) {
+                                            let _ = ui.image((*tex, icon_size));
+                                        }
+                                    }
+                                });
+
+                                ui.end_row();
+
+                                if response.clicked() {
+                                    // Request TemplateApp to create the craft node for this recipe
+                                    chosen = Some(DroppedWireChoice::Craft(Some(recipe.name.clone())));
+                                }
+
+                                if chosen.is_some() {
+                                    return;
+                                }
+                            }
+                        });
+                });
+
+            if let Some(ch) = chosen {
+                self.context_menu_recipe_filter.clear();
+                return Some(ch);
+            }
+        }
+
+        // Close on Escape
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.context_menu_recipe_filter.clear();
+            ui.close();
+        }
+
+        None
     }
 }
 
@@ -1292,6 +1525,79 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
         }
     }
 
+    fn has_graph_menu(&mut self, _pos: egui::Pos2, _snarl: &mut egui_snarl::Snarl<EditorNode>) -> bool {
+        true
+    }
+
+
+
+    fn has_dropped_wire_menu(&mut self, _pins: egui_snarl::ui::AnyPins<'_>, _snarl: &mut egui_snarl::Snarl<EditorNode>) -> bool {
+        // Allow any dropped wire to show the menu
+        true
+    }
+
+    fn show_dropped_wire_menu(
+        &mut self,
+        pos: egui::Pos2,
+        ui: &mut egui::Ui,
+        src_pins: egui_snarl::ui::AnyPins<'_>,
+        _snarl: &mut egui_snarl::Snarl<EditorNode>,
+    ) {
+        // Determine item type from source pins (if possible) so we can pre-filter recipes
+        let mut detected_item: Option<String> = None;
+        let (outs, ins) = match src_pins {
+            egui_snarl::ui::AnyPins::Out(outs) => {
+                // If single out pin and it has a named output, use it
+                if outs.len() == 1 {
+                    if let Some(node) = _snarl.get_node(outs[0].node) {
+                        if let Some(Some(name)) = node.output_names.get(outs[0].output) {
+                            detected_item = Some(name.clone());
+                        }
+                    }
+                }
+                (Some(outs.to_vec()), None)
+            }
+            egui_snarl::ui::AnyPins::In(ins) => {
+                // If single in pin and it has a named input, use it
+                if ins.len() == 1 {
+                    if let Some(node) = _snarl.get_node(ins[0].node) {
+                        if let Some(Some(name)) = node.input_names.get(ins[0].input) {
+                            detected_item = Some(name.clone());
+                        }
+                    }
+                }
+                (None, Some(ins.to_vec()))
+            }
+            _ => (None, None),
+        };
+
+        // If the user started the wire from an input pin, filter by outputs on candidate recipes
+        let filter_by_output = ins.is_some();
+        if let Some(choice) = self.draw_add_node_menu_contents(pos, ui, detected_item.as_deref(), filter_by_output) {
+            self.pending_dropped_wire = Some(PendingDroppedWire {
+                pos,
+                src_outs: outs,
+                src_ins: ins,
+                src_item_name: detected_item,
+                choice,
+            });
+            ui.close();
+        }
+    }
+
+    fn show_graph_menu(&mut self, pos: egui::Pos2, ui: &mut egui::Ui, _snarl: &mut egui_snarl::Snarl<EditorNode>) {
+        if let Some(choice) = self.draw_add_node_menu_contents(pos, ui, None, false) {
+            self.pending_dropped_wire = Some(PendingDroppedWire {
+                pos,
+                src_outs: None,
+                src_ins: None,
+                src_item_name: None,
+                choice,
+            });
+            ui.close();
+        }
+    }
+
     fn connect(
         &mut self,
         from: &egui_snarl::OutPin,
@@ -1430,13 +1736,6 @@ pub struct TemplateApp {
     // Context menu state
     #[serde(skip)]
     context_menu_recipe_filter: String,
-
-    #[serde(skip)]
-    show_add_node_popup: bool,
-
-    #[serde(skip)]
-    add_node_popup_pos: egui::Pos2,
-
     // Track which recipes have their checkboxes checked (invisible)
     #[serde(skip)]
     recipe_checkbox_state: std::collections::HashMap<String, bool>,
@@ -1492,8 +1791,7 @@ impl Default for TemplateApp {
             error_message: String::new(),
             error_time: 0.0,
             context_menu_recipe_filter: String::new(),
-            show_add_node_popup: false,
-            add_node_popup_pos: egui::pos2(0.0, 0.0),
+
             item_icon_cache: std::collections::HashMap::new(),
             recipe_checkbox_state: std::collections::HashMap::new(),
         };
@@ -1815,7 +2113,6 @@ impl TemplateApp {
                         self.snarl.insert_node(egui::pos2(300.0, 300.0), en);
                         self.error_message = "Created Sink".to_string();
                         self.error_time = 2.0;
-                        self.show_controls_popup = true;
                         ui.close();
                     }
                     ui.separator();
@@ -1950,6 +2247,127 @@ impl TemplateApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Production Graph Editor");
 
+            // Helper to connect pending dropped wire to newly inserted node's corresponding pins
+            fn connect_pending_wire_to_node(app: &mut TemplateApp, pending: &PendingDroppedWire, new_node: egui_snarl::NodeId) {
+                // If the dropped source was an Out pin (source->new node input), connect each out to the matching input (by item name) or corresponding index
+                if let Some(outs) = pending.src_outs.as_ref() {
+                    for out in outs.iter() {
+                        // Lookup the new node to inspect its input names
+                        let node_ref = match app.snarl.get_node(new_node) {
+                            Some(n) => n,
+                            None => continue,
+                        };
+                        let input_count = node_ref.input_names.len();
+                        if input_count == 0 {
+                            continue; // nothing to connect to
+                        }
+
+                        // Prefer to match by item name if the dropped wire had a detected item
+                        let dest_idx = if let Some(ref item_name) = pending.src_item_name {
+                            node_ref
+                                .input_names
+                                .iter()
+                                .position(|opt| opt.as_ref().map(|s| s == item_name).unwrap_or(false))
+                                .unwrap_or_else(|| if out.output < input_count { out.output } else { input_count - 1 })
+                        } else {
+                            if out.output < input_count { out.output } else { input_count - 1 }
+                        };
+
+                        let dest = egui_snarl::InPinId { node: new_node, input: dest_idx };
+
+                        // Disconnect existing remotes on the out pin (except the same pair)
+                        let out_remotes = app.snarl.out_pin(*out).remotes.clone();
+                        let mut affected_nodes = std::collections::HashSet::new();
+                        for r in out_remotes.iter() {
+                            if *r != dest {
+                                affected_nodes.insert(r.node);
+                                let _ = app.snarl.disconnect(*out, *r);
+                            }
+                        }
+
+                        // Disconnect existing remotes on the dest input (except the same pair)
+                        let in_remotes = app.snarl.in_pin(dest).remotes.clone();
+                        for r in in_remotes.iter() {
+                            if *r != *out {
+                                affected_nodes.insert(r.node);
+                                let _ = app.snarl.disconnect(*r, dest);
+                            }
+                        }
+
+                        // Finally connect
+                        let _ = app.snarl.connect(*out, dest);
+
+                        // Sync affected nodes and endpoints
+                        affected_nodes.insert(out.node);
+                        affected_nodes.insert(dest.node);
+                        for nid in affected_nodes {
+                            app.snarl_viewer.sync_merger_splitter(&mut app.snarl, nid);
+                        }
+                    }
+                }
+
+                // If the dropped source was an In pin (new node output->existing inputs), connect the new node output that matches the input's item type (or corresponding index)
+                if let Some(ins) = pending.src_ins.as_ref() {
+                    for inp in ins.iter() {
+                        // Lookup the new node to inspect its output names
+                        let node_ref = match app.snarl.get_node(new_node) {
+                            Some(n) => n,
+                            None => continue,
+                        };
+                        let output_count = node_ref.output_names.len();
+                        if output_count == 0 {
+                            continue; // nothing to connect from
+                        }
+
+                        // Prefer to match by item name if the dropped wire had a detected item
+                        let out_idx = if let Some(ref item_name) = pending.src_item_name {
+                            node_ref
+                                .output_names
+                                .iter()
+                                .position(|opt| opt.as_ref().map(|s| s == item_name).unwrap_or(false))
+                                .unwrap_or_else(|| if inp.input < output_count { inp.input } else { output_count - 1 })
+                        } else {
+                            if inp.input < output_count { inp.input } else { output_count - 1 }
+                        };
+
+                        let src_out = egui_snarl::OutPinId { node: new_node, output: out_idx };
+
+                        // Disconnect existing remotes on the new node output (except same pair)
+                        let out_remotes = app.snarl.out_pin(src_out).remotes.clone();
+                        let mut affected_nodes = std::collections::HashSet::new();
+                        for r in out_remotes.iter() {
+                            if *r != *inp {
+                                affected_nodes.insert(r.node);
+                                let _ = app.snarl.disconnect(src_out, *r);
+                            }
+                        }
+
+                        // Disconnect existing remotes on the destination input
+                        let in_remotes = app.snarl.in_pin(*inp).remotes.clone();
+                        for r in in_remotes.iter() {
+                            if *r != src_out {
+                                affected_nodes.insert(r.node);
+                                let _ = app.snarl.disconnect(*r, *inp);
+                            }
+                        }
+
+                        // Connect
+                        let _ = app.snarl.connect(src_out, *inp);
+
+                        // Sync affected nodes and endpoints
+                        affected_nodes.insert(src_out.node);
+                        affected_nodes.insert(inp.node);
+                        for nid in affected_nodes {
+                            app.snarl_viewer.sync_merger_splitter(&mut app.snarl, nid);
+                        }
+                    }
+                }
+
+                // Sync the newly created node as well
+                app.snarl_viewer.sync_merger_splitter(&mut app.snarl, new_node);
+            }
+
+
             // Show error message if present
             if !self.error_message.is_empty() && self.error_time > 0.0 {
                 ui.colored_label(
@@ -1970,11 +2388,86 @@ impl TemplateApp {
             // Node editor (direct snarl widget so it receives events for selection and dragging)
             // Provide the viewer a name -> TextureId map so it can resolve icons during connect/sync
             self.snarl_viewer.set_icon_map(self.item_icon_cache.iter().map(|(k, h)| (k.clone(), h.id())).collect());
+
+            // Sync recipe list and menu state into the viewer so the graph menu can show recipes
+            self.snarl_viewer.recipes = self.game_data.recipes.clone();
+            self.snarl_viewer.context_menu_recipe_filter = self.context_menu_recipe_filter.clone();
+            self.snarl_viewer.recipe_checkbox_state = self.recipe_checkbox_state.clone();
+
             let snarl_response = egui_snarl::ui::SnarlWidget::new()
                 .id(egui::Id::new("production-snarl"))
                 .style(self.snarl_style)
                 .show(&mut self.snarl, &mut self.snarl_viewer, ui);
 
+            // After rendering, copy back any menu/filter state and process pending add-node actions
+            self.context_menu_recipe_filter = self.snarl_viewer.context_menu_recipe_filter.clone();
+            self.recipe_checkbox_state = self.snarl_viewer.recipe_checkbox_state.clone();
+
+            if let Some(pending) = self.snarl_viewer.drain_pending_dropped_wire() {
+                match pending.choice {
+                    DroppedWireChoice::Merger => {
+                        let node_id = self.production_app.add_merger_node();
+                        let en = self.build_editor_node(node_id, "Merger", "merger");
+                        let new_ui_node = self.snarl.insert_node(pending.pos, en);
+                        // Connect dropped wire to first input if present
+                        connect_pending_wire_to_node(self, &pending, new_ui_node);
+                        self.error_message = "Created Merger".to_string();
+                        self.error_time = 2.0;
+                    }
+                    DroppedWireChoice::CustomSplitter => {
+                        let node_id = self.production_app.add_custom_splitter_node();
+                        let en = self.build_editor_node(node_id, "Splitter*", "custom_splitter");
+                        let new_ui_node = self.snarl.insert_node(pending.pos, en);
+                        connect_pending_wire_to_node(self, &pending, new_ui_node);
+                        self.error_message = "Created Custom Splitter".to_string();
+                        self.error_time = 2.0;
+                    }
+                    DroppedWireChoice::GameSplitter => {
+                        let node_id = self.production_app.add_game_splitter_node();
+                        let en = self.build_editor_node(node_id, "Splitter", "game_splitter");
+                        let new_ui_node = self.snarl.insert_node(pending.pos, en);
+                        connect_pending_wire_to_node(self, &pending, new_ui_node);
+                        self.error_message = "Created Game Splitter".to_string();
+                        self.error_time = 2.0;
+                    }
+                    DroppedWireChoice::Sink => {
+                        let node_id = self.production_app.add_sink_node();
+                        let en = self.build_editor_node(node_id, "Sink", "sink");
+                        let new_ui_node = self.snarl.insert_node(pending.pos, en);
+                        connect_pending_wire_to_node(self, &pending, new_ui_node);
+                        self.error_message = "Created Sink".to_string();
+                        self.error_time = 2.0;
+                    }
+                    DroppedWireChoice::Craft(ref opt_name) => {
+                        if let Some(recipe_name) = opt_name {
+                            match self.production_app.add_craft_node(&recipe_name, &self.game_data) {
+                                Ok(node_id) => {
+                                    // Try to use display_name if available, otherwise raw name
+                                    let display = self
+                                        .game_data
+                                        .recipes
+                                        .iter()
+                                        .find(|r| r.name == *recipe_name)
+                                        .map(|r| r.display_name.clone())
+                                        .unwrap_or(recipe_name.clone());
+                                    let en = self.build_editor_node(node_id, display, "craft");
+                                    let new_ui_node = self.snarl.insert_node(pending.pos, en);
+                                    connect_pending_wire_to_node(self, &pending, new_ui_node);
+                                    self.error_message = format!("Created: {}", recipe_name);
+                                    self.error_time = 2.0;
+                                }
+                                Err(e) => {
+                                    self.error_message = format!("Error: {}", e);
+                                    self.error_time = 3.0;
+                                }
+                            }
+                        } else {
+                            // Open the full recipe selector dialog if no recipe chosen
+                            self.show_recipe_selector = true;
+                        }
+                    }
+                }
+            }
             // If the viewer rejected a connection, surface it as an error message for a short time
             if let Some(msg) = self.snarl_viewer.rejected_connection_reason.take() {
                 self.error_message = msg;
@@ -2164,15 +2657,7 @@ impl TemplateApp {
                 }
             }
 
-            // Right-click context menu is handled in show_dialogs
-            if snarl_response.secondary_clicked() {
-                self.show_add_node_popup = true;
-                self.add_node_popup_pos = ui
-                    .ctx()
-                    .pointer_interact_pos()
-                    .unwrap_or(egui::pos2(300.0, 300.0));
-            }
-
+            // Right-click context menu handled by SnarlViewer::show_graph_menu now
             ui.separator();
 
             // Bottom status bar
@@ -2188,238 +2673,7 @@ impl TemplateApp {
     }
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
-        // Add node context menu (right-click menu) - using Area for true context menu behavior
-        if self.show_add_node_popup {
-            let menu_id = egui::Id::new("add_node_context_menu");
-
-            // Use Area to position the menu at the right-click location
-            let response = egui::Area::new(menu_id)
-                .fixed_pos(self.add_node_popup_pos)
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style())
-                        .inner_margin(0.0)
-                        .corner_radius(egui::CornerRadius::ZERO)
-                        .show(ui, |ui| {
-                            ui.set_max_width(350.0);
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            
-                            // Helper to create context menu item
-                            let mut menu_item = |ui: &mut egui::Ui, label: &str, tooltip: &str| -> bool {
-                                let (rect, response) = ui.allocate_exact_size(
-                                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
-                                    egui::Sense::click()
-                                );
-                                
-                                if response.hovered() {
-                                    ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, ui.visuals().widgets.hovered.bg_fill);
-                                }
-                                
-                                let mut child_ui = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center), None);
-                                child_ui.spacing_mut().button_padding = egui::vec2(8.0, 0.0);
-                                child_ui.style_mut().interaction.selectable_labels = false;
-                                let text_response = child_ui.label(label);
-                                if !tooltip.is_empty() {
-                                    text_response.on_hover_text(tooltip);
-                                }
-                                
-                                response.clicked()
-                            };
-                            
-                            // Basic nodes at top
-                            if menu_item(ui, "Merger", "") {
-                                let node_id = self.production_app.add_merger_node();
-                                let en = self.build_editor_node(node_id, "Merger", "merger");
-                                self.snarl.insert_node(self.add_node_popup_pos, en);
-                                self.error_message = "Created Merger".to_string();
-                                self.error_time = 2.0;
-                                self.show_add_node_popup = false;
-                            }
-                            
-                            if menu_item(ui, "Splitter*", "Splitter with independent output rates") {
-                                let node_id = self.production_app.add_custom_splitter_node();
-                                let en = self.build_editor_node(node_id, "Splitter*", "custom_splitter");
-                                self.snarl.insert_node(self.add_node_popup_pos, en);
-                                self.error_message = "Created Custom Splitter".to_string();
-                                self.error_time = 2.0;
-                                self.show_add_node_popup = false;
-                            }
-                            
-                            if menu_item(ui, "Splitter", "Splitter with equal output rates") {
-                                let node_id = self.production_app.add_game_splitter_node();
-                                let en = self.build_editor_node(node_id, "Splitter", "game_splitter");
-                                self.snarl.insert_node(self.add_node_popup_pos, en);
-                                self.error_message = "Created Game Splitter".to_string();
-                                self.error_time = 2.0;
-                                self.show_add_node_popup = false;
-                            }
-                            
-                            if menu_item(ui, "Sink", "") {
-                                let node_id = self.production_app.add_sink_node();
-                                let en = self.build_editor_node(node_id, "Sink", "sink");
-                                self.snarl.insert_node(self.add_node_popup_pos, en);
-                                self.error_message = "Created Sink".to_string();
-                                self.error_time = 2.0;
-                                self.show_add_node_popup = false;
-                            }
-                            
-                            ui.separator();
-                            
-                            // Recipe filter like C++ - auto-focus on first show
-                            let filter_response = ui.add(egui::TextEdit::singleline(&mut self.context_menu_recipe_filter).hint_text("Filter..."));
-                            if ui.memory(|mem| mem.focused().is_none()) {
-                                filter_response.request_focus();
-                            }
-                            
-                            ui.separator();
-                            
-                            // Show recipes
-                            let all_recipes: Vec<_> = self.game_data.recipes.iter()
-                                .map(|r| r.clone())
-                                .filter(|r| {
-                                    if self.context_menu_recipe_filter.is_empty() {
-                                        true
-                                    } else {
-                                        r.name.to_lowercase().contains(&self.context_menu_recipe_filter.to_lowercase()) ||
-                                        r.display_name.to_lowercase().contains(&self.context_menu_recipe_filter.to_lowercase())
-                                    }
-                                })
-                                .take(20)
-                                .collect();
-                            
-                            if all_recipes.is_empty() && !self.game_data.recipes.is_empty() {
-                                ui.label("No matching recipes");
-                            } else if self.game_data.recipes.is_empty() {
-                                ui.colored_label(egui::Color32::RED, "⚠ No game data loaded!");
-                                ui.label("Check assets/satisfactory.json");
-                            } else {
-                                egui::ScrollArea::vertical()
-                                    .auto_shrink([false; 2])
-                                    .max_height(300.0)
-                                    .show(ui, |ui| {
-                                        // Pin the grid to the available menu width so icon column can sit flush right
-                                        let menu_width = ui.available_width();
-                                        let checkbox_column_width = ui.spacing().interact_size.y;
-                                        let icon_size = egui::Vec2::splat(ui.text_style_height(&egui::TextStyle::Body));
-                                        let mut max_inputs = 0usize;
-                                        let mut max_outputs = 0usize;
-                                        let mut any_arrow = false;
-                                        for recipe in all_recipes.iter() {
-                                            let ins = recipe.ins.len().min(4);
-                                            let outs = recipe.outs.len().min(4);
-                                            max_inputs = max_inputs.max(ins);
-                                            max_outputs = max_outputs.max(outs);
-                                            any_arrow |= ins > 0 && outs > 0;
-                                        }
-                                        let max_icons = max_inputs + max_outputs; // capped at 4 per side
-                                        let arrow_width = if any_arrow { icon_size.x } else { 0.0 };
-                                        let scroll_style = &ui.style().spacing.scroll;
-                                        let scroll_bar_width = if scroll_style.floating {
-                                            scroll_style.bar_width
-                                        } else {
-                                            scroll_style.allocated_width()
-                                        };
-                                        let icon_column_width = (max_icons as f32) * icon_size.x + arrow_width + scroll_bar_width;
-                                        let name_column_width = (menu_width - checkbox_column_width - icon_column_width).max(80.0);
-
-                                        egui::Grid::new("recipe_grid")
-                                            .spacing([0.0, 0.0])
-                                            .num_columns(3)
-                                            .show(ui, |ui| {
-                                                for recipe in all_recipes {
-                                                    // First column: Checkbox for alternate recipes only
-                                                    if recipe.alternate {
-                                                        let checkbox_state = self.recipe_checkbox_state.entry(recipe.name.clone()).or_insert(true);
-                                                        let mut checked = *checkbox_state;
-                                                        if ui.checkbox(&mut checked, "").changed() {
-                                                            self.recipe_checkbox_state.insert(recipe.name.clone(), checked);
-                                                        }
-                                                    } else {
-                                                        // For non-alternate recipes, reserve space but don't show checkbox
-                                                        ui.allocate_space(egui::vec2(checkbox_column_width, checkbox_column_width));
-                                                    }
-                                                    
-                                                    // Second column: Recipe name as clickable area
-                                                    let (rect, response) = ui.allocate_exact_size(
-                                                        egui::vec2(name_column_width, ui.spacing().interact_size.y),
-                                                        egui::Sense::click()
-                                                    );
-                                                    
-                                                    if response.hovered() {
-                                                        ui.painter().rect_filled(rect, egui::CornerRadius::ZERO, ui.visuals().widgets.hovered.bg_fill);
-                                                    }
-                                                    
-                                                    let mut child_ui = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center), None);
-                                                    child_ui.spacing_mut().button_padding = egui::vec2(8.0, 0.0);
-                                                    child_ui.style_mut().interaction.selectable_labels = false;
-                                                    let text_response = child_ui.label(&recipe.display_name);
-                                                    
-                                                    ui.horizontal(|ui| {
-                                                        ui.set_width(icon_column_width);
-                                                        ui.spacing_mut().item_spacing.x = 0.0;
-                                                        ui.style_mut().interaction.selectable_labels = false;
-                                                        
-                                                        // Show input icons with tooltips (left to right from left edge)
-                                                        for inp in recipe.ins.iter().take(4) {
-                                                            if let Some(handle) = self.item_icon_cache.get(&inp.item_name) {
-                                                                let _img_response = ui.add(egui::Image::new(egui::load::SizedTexture::new(handle.id(), icon_size)));
-                                                            }
-                                                        }
-                                                        
-                                                        // Arrow between inputs and outputs
-                                                        if !recipe.ins.is_empty() && !recipe.outs.is_empty() {
-                                                            ui.label("-->");
-                                                        }
-                                                        
-                                                        // Show output icons with tooltips (left to right)
-                                                        for out in recipe.outs.iter().take(4) {
-                                                            if let Some(handle) = self.item_icon_cache.get(&out.item_name) {
-                                                                let _img_response = ui.add(egui::Image::new(egui::load::SizedTexture::new(handle.id(), icon_size)));
-                                                            }
-                                                        }
-                                                    });
-                                                    
-                                                    ui.end_row();
-
-                                                    if response.clicked() {
-                                                        match self.production_app.add_craft_node(&recipe.name, &self.game_data) {
-                                                            Ok(node_id) => {
-                                                                let en = self.build_editor_node(node_id, &recipe.display_name, "craft");
-                                                                self.snarl.insert_node(self.add_node_popup_pos, en);
-                                                                self.error_message = format!("Created: {}", recipe.display_name);
-                                                                self.error_time = 2.0;
-                                                            }
-                                                            Err(e) => {
-                                                                self.error_message = format!("Error: {}", e);
-                                                                self.error_time = 3.0;
-                                                            }
-                                                        }
-                                                        self.context_menu_recipe_filter.clear();
-                                                        self.show_add_node_popup = false;
-                                                    }
-                                                }
-                                            });
-                                    });
-                            }
-                            
-                            if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
-                                self.show_add_node_popup = false;
-                                self.context_menu_recipe_filter.clear();
-                            }
-                        });
-                });
-
-            // Close menu if clicked outside of it
-            if ctx.input(|i| i.pointer.primary_clicked()) {
-                if let Some(pointer_pos) = ctx.input(|i| i.pointer.interact_pos()) {
-                    let rect = response.response.rect;
-                    if !rect.contains(pointer_pos) {
-                        self.show_add_node_popup = false;
-                        self.context_menu_recipe_filter.clear();
-                    }
-                }
-            }
-        }
+        // Legacy add-node context menu removed — use SnarlViewer::show_graph_menu instead.    }
 
         // Controls popup
         if self.show_controls_popup {
