@@ -457,7 +457,7 @@ impl ProductionApp {
         let node_id = self.get_next_id();
         let mut craft_node = CraftNode::new(node_id, recipe_name.to_string());
 
-        // Set building name from recipe
+        // Set building name and recipe power from recipe
         craft_node.building_name = recipe.building_name.clone();
         craft_node.recipe_power = recipe.power;
         if let Some(building) = &recipe.building {
@@ -467,7 +467,7 @@ impl ProductionApp {
             craft_node.variable_power = building.variable_power;
         }
 
-        // Create input pins
+        // Create input pins (use recipe quantities as base_rate)
         for item in &recipe.ins {
             let pin_id = self.get_next_id();
             craft_node.base.ins.push(Pin::new(
@@ -476,11 +476,11 @@ impl ProductionApp {
                 node_id,
                 Some(item.item_name.clone()),
                 false,
-                FractionalNumber::default(),
+                item.quantity.clone(),
             ));
         }
 
-        // Create output pins
+        // Create output pins (use recipe quantities as base_rate)
         for item in &recipe.outs {
             let pin_id = self.get_next_id();
             craft_node.base.outs.push(Pin::new(
@@ -489,9 +489,12 @@ impl ProductionApp {
                 node_id,
                 Some(item.item_name.clone()),
                 false,
-                FractionalNumber::default(),
+                item.quantity.clone(),
             ));
         }
+
+        // Default to 1 building (so pins show per-recipe rates immediately)
+        craft_node.update_rate(FractionalNumber::new(1, 1));
 
         self.nodes.push(Box::new(craft_node));
         Ok(node_id)
