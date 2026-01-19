@@ -2348,34 +2348,44 @@ impl TemplateApp {
                             (all_built_machines / all_machines).value() as f32
                         };
 
-                        // Header row with expandable toggle (caret-only) and overall progress on the right
-                        ui.horizontal(|ui| {
-                            // small caret button to expand/collapse (separator already draws the title)
-                            if ui.button(if self.build_progress_open { "▾" } else { "▸" }).clicked() {
-                                self.build_progress_open = !self.build_progress_open;
-                            }
-                            ui.add(egui::ProgressBar::new(overall).text(format!("{:.0}%", overall * 100.0)).desired_width(120.0));
-                        });
-
-                        if self.build_progress_open {
+                        // Header row with expandable toggle (animated triangle icon) and overall progress on the right
+                        let id = ui.make_persistent_id("build_progress");
+                        let header_result = egui::collapsing_header::CollapsingState::load_with_default_open(
+                            ui.ctx(),
+                            id,
+                            self.build_progress_open,
+                        )
+                        .show_header(ui, |ui| {
+                                ui.add(
+                                egui::ProgressBar::new(overall)
+                                    .text(format!("{:.0}%", overall * 100.0))
+                                    .desired_width(120.0),
+                            );
+                        })
+                        .body(|ui| {
                             // Show per-building progress bars (sorted by total desc)
                             let mut machines: Vec<(String, crate::fractional_number::FractionalNumber)> = total_machines
                                 .into_iter()
                                 .collect();
-                            machines.sort_by(|a, b| b.1.value().partial_cmp(&a.1.value()).unwrap_or(std::cmp::Ordering::Equal));
+                            // sort alphabetically
+                            machines.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
-                            for (name, total) in machines.iter() {
-                                let built = built_machines.get(name).copied().unwrap_or_default();
-                                let pct = if total.value() == 0.0 { 0.0f32 } else { (built.value() / total.value()) as f32 };
-                                ui.horizontal(|ui| {
-                                    // small indent to mimic ImGui::Indent/Unindent
-                                    ui.add_space(12.0);
-                                    ui.label(name);
-                                    ui.add_space(6.0);
-                                    ui.add(egui::ProgressBar::new(pct).text(format!("{:.0}%", pct * 100.0)).desired_width(ui.available_width() * 0.65));
+                            egui::Grid::new("build_progress_grid")
+                                .num_columns(2)
+                                .show(ui, |ui| {
+                                    for (name, total) in machines.iter() {
+                                        let built = built_machines.get(name).copied().unwrap_or_default();
+                                        let pct = if total.value() == 0.0 { 0.0f32 } else { (built.value() / total.value()) as f32 };
+                                        ui.label(name);
+                                        ui.add(egui::ProgressBar::new(pct).text(format!("{:.0}%", pct * 100.0)).desired_width(ui.available_width() * 0.65));
+                                        ui.end_row();
+                                    }
                                 });
-                            }
-                        }
+
+                        });
+
+                        // Persist open state
+                        self.build_progress_open = header_result.2.is_some();
                     }
 
                     self.separator_text_left(ui, "Average Power Consumption");
