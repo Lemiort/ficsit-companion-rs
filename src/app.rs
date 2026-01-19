@@ -41,6 +41,27 @@ impl fmt::Display for NodeType {
     }
 }
 
+// Allow constructing NodeType from string literals (used by tests and helpers)
+impl From<&str> for NodeType {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "craft" => NodeType::Craft,
+            "merger" => NodeType::Merger,
+            "gamesplitter" | "game_splitter" | "game-splitter" => NodeType::GameSplitter,
+            "customsplitter" | "custom_splitter" | "custom-splitter" => NodeType::CustomSplitter,
+            "sink" => NodeType::Sink,
+            "group" => NodeType::Group,
+            _ => NodeType::Craft,
+        }
+    }
+}
+
+impl From<String> for NodeType {
+    fn from(s: String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
 /// Simple node representation for the node editor
 #[derive(Clone, Debug)]
 pub struct EditorNode {
@@ -2429,6 +2450,13 @@ impl TemplateApp {
                         
                             if ui.button("Save").on_hover_text("Save current production chain").clicked() {
                                 if !self.save_name.is_empty() {
+                                    // Sync UI node positions back into the production model so saves capture current layout
+                                    for node_info in self.snarl.nodes_info() {
+                                        let id = node_info.value.id;
+                                        let center = node_info.pos;
+                                        let _ = self.production_app.set_node_position(id, (center.x, center.y));
+                                    }
+
                                     match self.production_app.save_to_json() {
                                         Ok(json) => {
                                             #[cfg(not(target_arch = "wasm32"))]

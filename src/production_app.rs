@@ -852,6 +852,66 @@ impl ProductionApp {
         }
     }
 
+    /// Set the position of a node by id
+    pub fn set_node_position(&mut self, node_id: u64, pos: (f32, f32)) -> Result<(), String> {
+        let ni = self
+            .find_node_index(node_id)
+            .ok_or_else(|| format!("Node {} not found", node_id))?;
+        if let Some(n) = self.nodes[ni].downcast_mut::<CraftNode>() {
+            n.base.position = pos;
+            Ok(())
+        } else if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+            n.base.position = pos;
+            Ok(())
+        } else if let Some(n) = self.nodes[ni].downcast_mut::<GroupNode>() {
+            n.base.position = pos;
+            Ok(())
+        } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+            n.base.position = pos;
+            Ok(())
+        } else {
+            Err("Unsupported node kind for set position".into())
+        }
+    }
+
+    /// Get a node position by index (used for testing)
+    pub fn get_node_position(&self, index: usize) -> Option<(f32, f32)> {
+        if index >= self.nodes.len() {
+            return None;
+        }
+        let n = &self.nodes[index];
+        if let Some(craft) = n.downcast_ref::<CraftNode>() {
+            Some(craft.base.position)
+        } else if let Some(org) = n.downcast_ref::<OrganizerNode>() {
+            Some(org.base.position)
+        } else if let Some(group) = n.downcast_ref::<GroupNode>() {
+            Some(group.base.position)
+        } else if let Some(sink) = n.downcast_ref::<SinkNode>() {
+            Some(sink.base.position)
+        } else {
+            None
+        }
+    }
+
+    /// Find a node id by its index in the internal nodes array (used for testing)
+    pub fn find_node_by_index(&self, index: usize) -> Option<u64> {
+        if index >= self.nodes.len() {
+            return None;
+        }
+        let n = &self.nodes[index];
+        if let Some(craft) = n.downcast_ref::<CraftNode>() {
+            Some(craft.base.id)
+        } else if let Some(org) = n.downcast_ref::<OrganizerNode>() {
+            Some(org.base.id)
+        } else if let Some(group) = n.downcast_ref::<GroupNode>() {
+            Some(group.base.id)
+        } else if let Some(sink) = n.downcast_ref::<SinkNode>() {
+            Some(sink.base.id)
+        } else {
+            None
+        }
+    }
+
     /// Remove an input pin from a node (used by UI x button)
     pub fn remove_input_pin_from_node(&mut self, node_id: u64, idx: usize) -> Result<(), String> {
         let ni = self
@@ -1322,15 +1382,15 @@ impl ProductionApp {
 
     /// Get pin ID by node index and pin index within that node
     fn get_pin_id_by_indices(
-        &self,
+        &mut self,
         node_idx: usize,
         pin_idx: usize,
         direction: PinDirection,
     ) -> Result<u64, String> {
-        let node_box = &self.nodes[node_idx];
+        // We allow Organizer nodes to create pins dynamically when restoring links
 
-        // Try each node type
-        if let Some(craft) = node_box.downcast_ref::<CraftNode>() {
+        // Craft nodes: must already have pins
+        if let Some(craft) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
             let pins = match direction {
                 PinDirection::Input => &craft.base.ins,
                 PinDirection::Output => &craft.base.outs,
@@ -1340,7 +1400,8 @@ impl ProductionApp {
                 .map(|p| p.id)
                 .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
         }
-        if let Some(sink) = node_box.downcast_ref::<SinkNode>() {
+        // Sink nodes: must already have pins
+        if let Some(sink) = self.nodes[node_idx].downcast_ref::<SinkNode>() {
             return sink
                 .base
                 .ins
@@ -1348,17 +1409,52 @@ impl ProductionApp {
                 .map(|p| p.id)
                 .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
         }
-        if let Some(org) = node_box.downcast_ref::<OrganizerNode>() {
-            let pins = match direction {
-                PinDirection::Input => &org.base.ins,
-                PinDirection::Output => &org.base.outs,
+        // Organizer nodes: create missing pins up to requested index
+        if self.nodes[node_idx].downcast_ref::<OrganizerNode>().is_some() {
+            // Read current length without holding a mutable borrow
+            let current_len = {
+                let org_ref = self.nodes[node_idx].downcast_ref::<OrganizerNode>().unwrap();
+                match direction {
+                    PinDirection::Input => org_ref.base.ins.len(),
+                    PinDirection::Output => org_ref.base.outs.len(),
+                }
             };
-            return pins
-                .get(pin_idx)
-                .map(|p| p.id)
-                .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
+            if pin_idx < current_len {
+                let org_ref = self.nodes[node_idx].downcast_ref::<OrganizerNode>().unwrap();
+                let id = match direction {
+                    PinDirection::Input => org_ref.base.ins[pin_idx].id,
+                    PinDirection::Output => org_ref.base.outs[pin_idx].id,
+                };
+                return Ok(id);
+            }
+            // Need to create missing pins: compute how many
+            let needed = pin_idx + 1 - current_len;
+            let mut new_ids = Vec::new();
+            for _ in 0..needed {
+                new_ids.push(self.get_next_id());
+            }
+            // Now mutate the organizer to push pins
+            let org_mut = self.nodes[node_idx].downcast_mut::<OrganizerNode>().unwrap();
+            for new_pin_id in new_ids {
+                match direction {
+                    PinDirection::Input => {
+                        let locked = org_mut.base.outs.get(0).map(|p| p.locked).unwrap_or(false);
+                        org_mut.base.ins.push(Pin::new(new_pin_id, PinDirection::Input, org_mut.base.id, org_mut.item_name.clone(), locked, FractionalNumber::default()));
+                    }
+                    PinDirection::Output => {
+                        let locked = org_mut.base.ins.get(0).map(|p| p.locked).unwrap_or(false);
+                        org_mut.base.outs.push(Pin::new(new_pin_id, PinDirection::Output, org_mut.base.id, org_mut.item_name.clone(), locked, FractionalNumber::default()));
+                    }
+                }
+            }
+            let id = match direction {
+                PinDirection::Input => org_mut.base.ins[pin_idx].id,
+                PinDirection::Output => org_mut.base.outs[pin_idx].id,
+            };
+            return Ok(id);
         }
-        if let Some(group) = node_box.downcast_ref::<GroupNode>() {
+        // Group nodes: must already have pins
+        if let Some(group) = self.nodes[node_idx].downcast_ref::<GroupNode>() {
             let pins = match direction {
                 PinDirection::Input => &group.base.ins,
                 PinDirection::Output => &group.base.outs,

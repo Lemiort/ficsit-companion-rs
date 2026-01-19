@@ -92,3 +92,35 @@ fn test_production_chain_structure() {
         );
     }
 }
+
+#[test]
+fn test_positions_preserved_on_save_reload() {
+    let json = include_str!("../tests/production_chain.fcs");
+    let game_data = load_game_data();
+
+    let mut app = ProductionApp::new();
+    app.load_from_json(json, Some(&game_data))
+        .expect("Failed to load");
+
+    // Mutate positions to known values per index
+    for i in 0..app.node_count() {
+        let new_pos = (i as f32 * 10.0 + 1.0, i as f32 * 20.0 + 2.0);
+        let node_id = match app.find_node_by_index(i) {
+            Some(id) => id,
+            None => continue,
+        };
+        app.set_node_position(node_id, new_pos).expect("set position failed");
+    }
+
+    let saved = app.save_to_json().expect("Failed to save");
+    let mut app2 = ProductionApp::new();
+    app2.load_from_json(&saved, Some(&game_data))
+        .expect("Failed to reload");
+
+    // Compare positions by index
+    for i in 0..app.node_count() {
+        let p1 = app.get_node_position(i).expect("pos missing");
+        let p2 = app2.get_node_position(i).expect("pos missing after reload");
+        assert_eq!(p1, p2, "Position mismatch at index {}: {:?} vs {:?}", i, p1, p2);
+    }
+}
