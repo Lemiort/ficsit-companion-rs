@@ -1,5 +1,4 @@
 use crate::production_app::ProductionApp;
-use egui::{Widget, accesskit::Node, text};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -199,6 +198,9 @@ struct SnarlViewer {
     // Pending somersloop edits: node_id -> string
     pending_node_somersloop_edits: Vec<(u64, String)>,
 
+    // Pending building count edits: node_id -> string
+    pending_node_building_edits: Vec<(u64, String)>,
+
     // Pending group built edits: node_id -> bool
     pending_node_built_edits: Vec<(u64, bool)>,
 
@@ -206,8 +208,15 @@ struct SnarlViewer {
     pending_pin_adds: Vec<(u64, crate::pin::PinDirection)>,
     pending_pin_removes: Vec<(u64, crate::pin::PinDirection, usize)>,
 
+    // Pending connection/disconnection events to be processed by TemplateApp
+    pending_connections: Vec<(egui_snarl::OutPinId, egui_snarl::InPinId)>,
+    pending_disconnects: Vec<(egui_snarl::OutPinId, egui_snarl::InPinId)>,
+
     // Pending dropped wire action recorded by show_dropped_wire_menu / show_graph_menu
     pending_dropped_wire: Option<PendingDroppedWire>,
+
+    // Recent pin edit successes (node_id, direction, pin_idx) -> Instant
+    pub pin_success: std::collections::HashMap<(u64, PinDirection, usize), std::time::Instant>,
 
     // Map of item name -> TextureId supplied by the app so the viewer can resolve icons immediately
     icon_map: std::collections::HashMap<String, egui::TextureId>,
@@ -251,8 +260,34 @@ impl SnarlViewer {
         std::mem::take(&mut self.pending_pin_rate_edits)
     }
 
+    fn drain_pending_connections(&mut self) -> Vec<(egui_snarl::OutPinId, egui_snarl::InPinId)> {
+        std::mem::take(&mut self.pending_connections)
+    }
+
+    fn drain_pending_disconnects(&mut self) -> Vec<(egui_snarl::OutPinId, egui_snarl::InPinId)> {
+        std::mem::take(&mut self.pending_disconnects)
+    }
+
+    // Mark a successful pin edit (record time)
+    fn mark_pin_success(&mut self, node_id: u64, dir: PinDirection, idx: usize) {
+        self.pin_success.insert((node_id, dir, idx), std::time::Instant::now());
+    }
+
+    // Return true if the pin edit was successful recently (within 1.5s)
+    fn is_pin_recent_success(&self, node_id: u64, dir: PinDirection, idx: usize) -> bool {
+        if let Some(t) = self.pin_success.get(&(node_id, dir, idx)) {
+            t.elapsed().as_secs_f32() < 1.5
+        } else {
+            false
+        }
+    }
+
     fn drain_pending_somersloop_edits(&mut self) -> Vec<(u64, String)> {
         std::mem::take(&mut self.pending_node_somersloop_edits)
+    }
+
+    fn drain_pending_building_edits(&mut self) -> Vec<(u64, String)> {
+        std::mem::take(&mut self.pending_node_building_edits)
     }
 
     fn drain_pending_built_edits(&mut self) -> Vec<(u64, bool)> {
@@ -288,9 +323,10 @@ impl SnarlViewer {
         let buf_ref = self.edit_buffers.get_mut(key).unwrap();
 
         // Reserve a rectangle of exact size for the input
-        let (rect, _alloc_response) = ui.allocate_exact_size(
+        // Use hover sense so inner TextEdit receives clicks; capture alloc_response to force-focus inner widget
+        let (rect, alloc_response) = ui.allocate_exact_size(
             egui::Vec2::new(width, ui.spacing().interact_size.y),
-            egui::Sense::click(),
+            egui::Sense::hover(),
         );
 
         // Active input: render TextEdit inside the reserved rect
@@ -299,8 +335,17 @@ impl SnarlViewer {
             .allocate_ui_at_rect(rect, |ui| ui.add_enabled(!disabled, text_edit))
             .response;
 
+        // If outer rect was clicked, ensure the inner TextEdit gets focus
+        if alloc_response.clicked() {
+            eprintln!("[UI][debug] outer rect clicked at rect={:?}", rect);
+            response.request_focus();
+            eprintln!("[UI][debug] requested focus for inner TextEdit");
+        }
+
         // Focus highlight (blue)
         if response.has_focus() || response.gained_focus() {
+            eprintln!("[UI][debug] response focus state: has_focus={} gained_focus={} clicked={}",
+                      response.has_focus(), response.gained_focus(), response.clicked());
             ui.painter().rect_filled(
                 rect.expand(2.0),
                 4.0,
@@ -332,7 +377,7 @@ impl SnarlViewer {
         ui.spacing_mut().item_spacing.y = 0.0;
 
         // Helper to render a simple menu item (hover highlight + click)
-        let mut menu_item = |ui: &mut egui::Ui, label: &str, tooltip: &str| -> bool {
+        let menu_item = |ui: &mut egui::Ui, label: &str, tooltip: &str| -> bool {
             let (rect, response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
                 egui::Sense::click(),
@@ -1128,7 +1173,29 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                     let disabled = node.input_locked.get(idx).copied().unwrap_or(false);
                     let response =
                         self.render_fractional_input(ui, &key, &mut tmp, desired_width, disabled);
-                    if response.lost_focus() && response.changed() {
+                    // Submit when the user presses Enter while focused, or when the field loses focus and the text changed.
+                    let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    // Debug info to help diagnose missed submits
+                    if enter_pressed || response.lost_focus() || response.changed() || response.has_focus() {
+                        eprintln!("[UI][debug] key={} enter={} has_focus={} changed={} lost_focus={}",
+                                  key, enter_pressed, response.has_focus(), response.changed(), response.lost_focus());
+                    }
+                    // Be tolerant: allow Enter to submit if the field has focus or the mouse is hovering it
+                    // Also accept Enter if the edit buffer differs from the displayed rate string (user typed without focusing)
+                    let buf_opt = self.edit_buffers.get(&key).cloned();
+                    let displayed_str = rate.clone();
+                    let typed_differs = match &buf_opt {
+                        Some(b) => b != &displayed_str,
+                        None => false,
+                    };
+                    let submit = (enter_pressed && (response.has_focus() || response.hovered() || typed_differs)) || (response.lost_focus() && response.changed());
+                    if enter_pressed && !response.has_focus() && response.hovered() {
+                        eprintln!("[UI][debug] Enter pressed while not focused but hovered: key={}", key);
+                    }
+                    if enter_pressed && typed_differs {
+                        eprintln!("[UI][debug] Enter pressed and edit buffer differs from displayed value: key={} buf={:?} displayed={}", key, buf_opt, displayed_str);
+                    }
+                    if submit {
                         if let Some(buf) = self.edit_buffers.get(&key) {
                             self.pending_pin_rate_edits.push((
                                 node.id,
@@ -1136,7 +1203,16 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                 idx,
                                 buf.clone(),
                             ));
+                            eprintln!("[UI] queued edit: node={} dir=Input idx={} -> {}", node.id, idx, buf);
+                        } else {
+                            eprintln!("[UI][debug] edit_buffers missing for key {}", key);
                         }
+                    }
+
+                    // Inline success indicator (green dot) if this pin had a recent successful edit
+                    if self.is_pin_recent_success(node.id, PinDirection::Input, idx) {
+                        let dot_center = egui::pos2(response.rect.right() + 8.0, response.rect.center().y);
+                        ui.painter().circle_filled(dot_center, 4.0, egui::Color32::from_rgb(80, 200, 120));
                     }
                 }
 
@@ -1239,7 +1315,29 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                             disabled,
                         );
                         rate_rect = Some(response.rect);
-                        if response.lost_focus() && response.changed() {
+                        // Submit when the user presses Enter while focused, or when the field loses focus and the text changed.
+                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        // Debug info to help diagnose missed submits
+                        if enter_pressed || response.lost_focus() || response.changed() || response.has_focus() {
+                            eprintln!("[UI][debug] key={} enter={} has_focus={} changed={} lost_focus={}",
+                                      key, enter_pressed, response.has_focus(), response.changed(), response.lost_focus());
+                        }
+                        // Be tolerant: allow Enter to submit if the field has focus or the mouse is hovering it
+                        // Also accept Enter if the edit buffer differs from the displayed rate string (user typed without focusing)
+                        let buf_opt = self.edit_buffers.get(&key).cloned();
+                        let displayed_str = rate.clone();
+                        let typed_differs = match &buf_opt {
+                            Some(b) => b != &displayed_str,
+                            None => false,
+                        };
+                        let submit = (enter_pressed && (response.has_focus() || response.hovered() || typed_differs)) || (response.lost_focus() && response.changed());
+                        if enter_pressed && !response.has_focus() && response.hovered() {
+                            eprintln!("[UI][debug] Enter pressed while not focused but hovered: key={}", key);
+                        }
+                        if enter_pressed && typed_differs {
+                            eprintln!("[UI][debug] Enter pressed and edit buffer differs from displayed value: key={} buf={:?} displayed={}", key, buf_opt, displayed_str);
+                        }
+                        if submit {
                             if let Some(buf) = self.edit_buffers.get(&key) {
                                 self.pending_pin_rate_edits.push((
                                     node.id,
@@ -1247,7 +1345,16 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                     idx,
                                     buf.clone(),
                                 ));
+                                eprintln!("[UI] queued edit: node={} dir=Output idx={} -> {}", node.id, idx, buf);
+                            } else {
+                                eprintln!("[UI][debug] edit_buffers missing for key {}", key);
                             }
+                        }
+
+                        // Inline success indicator (green dot) if this pin had a recent successful edit
+                        if self.is_pin_recent_success(node.id, PinDirection::Output, idx) {
+                            let dot_center = egui::pos2(response.rect.right() + 8.0, response.rect.center().y);
+                            ui.painter().circle_filled(dot_center, 4.0, egui::Color32::from_rgb(80, 200, 120));
                         }
                     }
 
@@ -1373,13 +1480,34 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                         if !node.building_count_str.is_empty() {
                                             let key = format!("building:{}", node.id);
                                             let mut tmp = node.building_count_str.clone();
-                                            let _r = self.render_fractional_input(
+                                            let r = self.render_fractional_input(
                                                 ui,
                                                 &key,
                                                 &mut tmp,
                                                 center_field_width,
                                                 false,
                                             );
+                                            // Commit building count edits on Enter (focused/hovered/typed-diff) or lost-focus+changed
+                                            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                            if enter_pressed || r.lost_focus() || r.changed() || r.has_focus() {
+                                                eprintln!("[UI][debug] key={} enter={} has_focus={} changed={} lost_focus={}",
+                                                          key, enter_pressed, r.has_focus(), r.changed(), r.lost_focus());
+                                            }
+                                            let buf_opt = self.edit_buffers.get(&key).cloned();
+                                            let displayed_str = node.building_count_str.clone();
+                                            let typed_differs = match &buf_opt {
+                                                Some(b) => b != &displayed_str,
+                                                None => false,
+                                            };
+                                            let submit = (enter_pressed && (r.has_focus() || r.hovered() || typed_differs)) || (r.lost_focus() && r.changed());
+                                            if submit {
+                                                if let Some(buf) = self.edit_buffers.get(&key) {
+                                                    self.pending_node_building_edits.push((node.id, buf.clone()));
+                                                    eprintln!("[UI] queued building edit: node={} -> {}", node.id, buf);
+                                                } else {
+                                                    eprintln!("[UI][debug] edit_buffers missing for key {}", key);
+                                                }
+                                            }
                                         }
                                         if !node.building_name.is_empty() {
                                             ui.label(&node.building_name);
@@ -1765,6 +1893,8 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                 out_replacements += 1;
                 affected_nodes.insert(r.node);
                 let _ = snarl.disconnect(from.id, r);
+                // record pending disconnect so TemplateApp can delete production link
+                self.pending_disconnects.push((from.id, r));
             }
         }
         let mut in_replacements = 0usize;
@@ -1773,6 +1903,8 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                 in_replacements += 1;
                 affected_nodes.insert(r.node);
                 let _ = snarl.disconnect(r, to.id);
+                // record pending disconnect so TemplateApp can delete production link
+                self.pending_disconnects.push((r, to.id));
             }
         }
 
@@ -1785,6 +1917,8 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
 
         // Finally perform the new connection
         let _ = snarl.connect(from.id, to.id);
+        // record pending connection for TemplateApp to create production link & run propagation
+        self.pending_connections.push((from.id, to.id));
 
         // Sync pin-type assignment/removal for the affected nodes and the endpoints
         affected_nodes.insert(from.id.node);
@@ -2893,13 +3027,101 @@ impl TemplateApp {
                 self.error_time = 3.0;
             }
 
+            // Collect nodes that need a UI refresh after mutations
+            let mut nodes_to_refresh: Vec<u64> = Vec::new();
+
             // Process pending pin rate edits collected by the SnarlViewer during rendering
             for (node_id, dir, idx, text) in self.snarl_viewer.drain_pending_edits() {
                 match crate::fractional_number::FractionalNumber::from_string(&text) {
                     Ok(f) => {
                         if crate::rate_calculator::validate_rate(&f) {
+                            eprintln!("[UI] processing pending edit: node={} dir={:?} idx={} parsed={}", node_id, dir, idx, f.to_fraction_string());
                             match self.production_app.set_pin_rate(node_id, dir, idx, f) {
-                                Ok(()) => {}
+                                Ok(()) => {
+                                    // Success feedback and refresh affected nodes (the node itself and direct neighbors)
+                                    self.error_message = "Updated pin rate".to_string();
+                                    self.error_time = 1.0;
+                                    nodes_to_refresh.push(node_id);
+                                    // Mark pin success (inline UI indicator)
+                                    self.snarl_viewer.mark_pin_success(node_id, dir, idx);
+
+                                    // Immediately update the snarl node display for this node so the user sees the change
+                                    if let Some((ins, outs)) = self.production_app.get_node_pin_rates(node_id) {
+                                        for node_info in self.snarl.nodes_info_mut() {
+                                            if node_info.value.id == node_id {
+                                                node_info.value.input_rates = ins.clone();
+                                                node_info.value.output_rates = outs.clone();
+                                                node_info.value.input_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(ins_locked,_)| ins_locked).unwrap_or(Vec::new());
+                                                node_info.value.output_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(_,outs_locked)| outs_locked).unwrap_or(Vec::new());
+
+                                                // Also update building count and power info immediately so UI reflects changes without a full rebuild
+                                                if let Some((count_str, _)) = self.production_app.get_node_building_info(node_id) {
+                                                    node_info.value.building_count_str = count_str.clone();
+                                                    // Update edit buffer so the footer input shows the new value immediately
+                                                    self.snarl_viewer.edit_buffers.insert(format!("building:{}", node_id), count_str);
+                                                }
+                                                if let Some((same, last, variable)) = self.production_app.get_node_power_info(node_id) {
+                                                    node_info.value.same_clock_power_str = same.clone();
+                                                    node_info.value.last_underclock_power_str = last.clone();
+                                                    node_info.value.variable_power = variable;
+                                                    // Update displayed power buffer based on current viewer mode
+                                                    let power_display = if self.snarl_viewer.power_equal_clocks { same } else { last };
+                                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:power", node_id), power_display);
+                                                }
+                                                if let Some((num_str, somersloop_mult)) = self.production_app.get_node_somersloop_info(node_id) {
+                                                    node_info.value.num_somersloop_str = num_str.clone();
+                                                    node_info.value.somersloop_mult = somersloop_mult;
+                                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:somersloop", node_id), num_str);
+                                                }
+
+                                                // If this is a sink node, recompute sink points for display
+                                                if node_info.value.node_type == NodeType::Sink {
+                                                    let mut sum = crate::fractional_number::FractionalNumber::default();
+                                                    for (opt_name, opt_rate) in node_info.value.input_names.iter().zip(node_info.value.input_rates.iter()) {
+                                                        if let (Some(name), Some(rate_str)) = (opt_name.as_ref(), opt_rate.as_ref()) {
+                                                            if let Ok(r) = crate::fractional_number::FractionalNumber::from_string(rate_str) {
+                                                                if let Some(item_rc) = self.game_data.items.get(name) {
+                                                                    let pts = r * crate::fractional_number::FractionalNumber::from(item_rc.sink_value as i64);
+                                                                    sum += pts;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    node_info.value.sink_points_str = sum.to_float_string();
+                                                    node_info.value.sink_points_fraction_str = sum.to_fraction_string();
+                                                }
+
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    // Expand refresh set to all nodes in the connected component of this node
+                                    use std::collections::HashSet;
+                                    let mut connected: HashSet<u64> = HashSet::new();
+                                    connected.insert(node_id);
+                                    let mut changed = true;
+                                    while changed {
+                                        changed = false;
+                                        for link in &self.production_app.links {
+                                            let start_node = self.production_app.find_pin_location(link.start_pin_id).map(|(n,_,_)| n);
+                                            let end_node = self.production_app.find_pin_location(link.end_pin_id).map(|(n,_,_)| n);
+                                            if let (Some(s), Some(e)) = (start_node, end_node) {
+                                                if connected.contains(&s) && !connected.contains(&e) {
+                                                    connected.insert(e);
+                                                    changed = true;
+                                                }
+                                                if connected.contains(&e) && !connected.contains(&s) {
+                                                    connected.insert(s);
+                                                    changed = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    for n in connected {
+                                        nodes_to_refresh.push(n);
+                                    }
+                                }
                                 Err(e) => {
                                     self.error_message = format!("Error: {}", e);
                                     self.error_time = 3.0;
@@ -2917,6 +3139,65 @@ impl TemplateApp {
                 }
             }
 
+            // Process pending disconnects from the viewer and remove corresponding production links
+            for (out_pin, in_pin) in self.snarl_viewer.drain_pending_disconnects() {
+                if let (Some(out_node), Some(in_node)) = (self.snarl.get_node(out_pin.node), self.snarl.get_node(in_pin.node)) {
+                    let out_prod = out_node.id;
+                    let in_prod = in_node.id;
+                    if let (Some(start_pid), Some(end_pid)) = (
+                        self.production_app.get_pin_id(out_prod, PinDirection::Output, out_pin.output),
+                        self.production_app.get_pin_id(in_prod, PinDirection::Input, in_pin.input),
+                    ) {
+                        // Find link id matching these pins
+                        let maybe_link = self.production_app.links.iter().find(|l| {
+                            (l.start_pin_id == start_pid && l.end_pin_id == end_pid)
+                                || (l.start_pin_id == end_pid && l.end_pin_id == start_pid)
+                        }).map(|l| l.id);
+
+                        if let Some(lid) = maybe_link {
+                            if let Err(e) = self.production_app.delete_link(lid) {
+                                self.error_message = format!("Failed to delete link: {}", e);
+                                self.error_time = 3.0;
+                            } else {
+                                // refresh both endpoint nodes
+                                nodes_to_refresh.push(out_prod);
+                                nodes_to_refresh.push(in_prod);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Process pending connections and create production links (propagate rates)
+            for (out_pin, in_pin) in self.snarl_viewer.drain_pending_connections() {
+                if let (Some(out_node), Some(in_node)) = (self.snarl.get_node(out_pin.node), self.snarl.get_node(in_pin.node)) {
+                    let out_prod = out_node.id;
+                    let in_prod = in_node.id;
+                    if let (Some(start_pid), Some(end_pid)) = (
+                        self.production_app.get_pin_id(out_prod, PinDirection::Output, out_pin.output),
+                        self.production_app.get_pin_id(in_prod, PinDirection::Input, in_pin.input),
+                    ) {
+                        match self.production_app.create_link(start_pid, end_pid) {
+                            Ok((_link_id, Some(warn))) => {
+                                self.error_message = warn;
+                                self.error_time = 4.0;
+                                // still refresh both endpoints to keep UI consistent
+                                nodes_to_refresh.push(out_prod);
+                                nodes_to_refresh.push(in_prod);
+                            }
+                            Ok((_link_id, None)) => {
+                                // success; refresh both endpoint nodes
+                                nodes_to_refresh.push(out_prod);
+                                nodes_to_refresh.push(in_prod);
+                            }
+                            Err(e) => {
+                                self.error_message = format!("Error creating link: {}", e);
+                                self.error_time = 4.0;
+                            }
+                        }
+                    }
+                }
+            }
 
 
             // Process somersloop edits collected by the SnarlViewer
@@ -2925,7 +3206,10 @@ impl TemplateApp {
                     Ok(f) => {
                         // Only accept non-negative integers. Use ProductionApp to apply and validate cap
                         match self.production_app.set_node_somersloop(node_id, f) {
-                            Ok(()) => {}
+                            Ok(()) => {
+                                // refresh node so UI shows updated somersloop multiplier
+                                nodes_to_refresh.push(node_id);
+                            }
                             Err(e) => {
                                 self.error_message = format!("Error: {}", e);
                                 self.error_time = 3.0;
@@ -2934,6 +3218,84 @@ impl TemplateApp {
                     }
                     Err(_) => {
                         self.error_message = "Invalid somersloop format".to_string();
+                        self.error_time = 2.0;
+                    }
+                }
+            }
+
+            // Process building count edits collected by the SnarlViewer
+            for (node_id, text) in self.snarl_viewer.drain_pending_building_edits() {
+                match crate::fractional_number::FractionalNumber::from_string(&text) {
+                    Ok(f) => {
+                        if crate::rate_calculator::validate_rate(&f) {
+                            eprintln!("[UI] processing pending building edit: node={} parsed={}", node_id, f.to_fraction_string());
+                            match self.production_app.set_node_building_count(node_id, f) {
+                                Ok(()) => {
+                                    self.error_message = "Updated building count".to_string();
+                                    self.error_time = 1.0;
+                                    nodes_to_refresh.push(node_id);
+
+                                    // Immediately update the snarl node display for this node so the user sees the change
+                                    if let Some((ins, outs)) = self.production_app.get_node_pin_rates(node_id) {
+                                        for node_info in self.snarl.nodes_info_mut() {
+                                            if node_info.value.id == node_id {
+                                                node_info.value.input_rates = ins.clone();
+                                                node_info.value.output_rates = outs.clone();
+                                                node_info.value.input_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(ins_locked,_)| ins_locked).unwrap_or(Vec::new());
+                                                node_info.value.output_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(_,outs_locked)| outs_locked).unwrap_or(Vec::new());
+
+                                                // Also update building count and power info immediately so UI reflects changes without a full rebuild
+                                                if let Some((count_str, _)) = self.production_app.get_node_building_info(node_id) {
+                                                    node_info.value.building_count_str = count_str.clone();
+                                                    self.snarl_viewer.edit_buffers.insert(format!("building:{}", node_id), count_str);
+                                                }
+                                                if let Some((same, last, variable)) = self.production_app.get_node_power_info(node_id) {
+                                                    node_info.value.same_clock_power_str = same.clone();
+                                                    node_info.value.last_underclock_power_str = last.clone();
+                                                    node_info.value.variable_power = variable;
+                                                    let power_display = if self.snarl_viewer.power_equal_clocks { same } else { last };
+                                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:power", node_id), power_display);
+                                                }
+                                                if let Some((num_str, somersloop_mult)) = self.production_app.get_node_somersloop_info(node_id) {
+                                                    node_info.value.num_somersloop_str = num_str.clone();
+                                                    node_info.value.somersloop_mult = somersloop_mult;
+                                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:somersloop", node_id), num_str);
+                                                }
+
+                                                // If this is a sink node, recompute sink points for display
+                                                if node_info.value.node_type == NodeType::Sink {
+                                                    let mut sum = crate::fractional_number::FractionalNumber::default();
+                                                    for (opt_name, opt_rate) in node_info.value.input_names.iter().zip(node_info.value.input_rates.iter()) {
+                                                        if let (Some(name), Some(rate_str)) = (opt_name.as_ref(), opt_rate.as_ref()) {
+                                                            if let Ok(r) = crate::fractional_number::FractionalNumber::from_string(rate_str) {
+                                                                if let Some(item_rc) = self.game_data.items.get(name) {
+                                                                    let pts = r * crate::fractional_number::FractionalNumber::from(item_rc.sink_value as i64);
+                                                                    sum += pts;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    node_info.value.sink_points_str = sum.to_float_string();
+                                                    node_info.value.sink_points_fraction_str = sum.to_fraction_string();
+                                                }
+
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    self.error_message = format!("Error: {}", e);
+                                    self.error_time = 3.0;
+                                }
+                            }
+                        } else {
+                            self.error_message = "Invalid rate (negative)".to_string();
+                            self.error_time = 2.0;
+                        }
+                    }
+                    Err(_) => {
+                        self.error_message = "Invalid rate format".to_string();
                         self.error_time = 2.0;
                     }
                 }
@@ -3002,7 +3364,6 @@ impl TemplateApp {
 
             // Process pending pin additions (e.g., + button) collected by the SnarlViewer
             // Collect nodes that need a UI refresh after mutating the production model
-            let mut nodes_to_refresh: Vec<u64> = Vec::new();
 
             for (node_id, dir) in self.snarl_viewer.drain_pending_pin_adds() {
                 let res = match dir {
@@ -3032,7 +3393,8 @@ impl TemplateApp {
             }
 
             // Refresh modified nodes in the snarl widget (do this after mutations to avoid borrow conflicts)
-            for node_id in nodes_to_refresh {
+            for node_id_ref in &nodes_to_refresh {
+                let node_id = *node_id_ref;
                 let mut new_en = None;
                 // Build new editor node first (immutable borrow)
                 for node_info in self.snarl.nodes_info() {
@@ -3070,10 +3432,38 @@ impl TemplateApp {
                             } else {
                                 node_info.value = en.clone();
                             }
+
+                            // Sync edit buffers so UI input/input fields reflect the new rates immediately
+                            let en_ref = &node_info.value;
+                            for (i, opt) in en_ref.input_rates.iter().enumerate() {
+                                if let Some(rate_str) = opt {
+                                    let key = format!("pin:{}:in:{}", node_id, i);
+                                    self.snarl_viewer.edit_buffers.insert(key, rate_str.clone());
+                                }
+                            }
+                            for (i, opt) in en_ref.output_rates.iter().enumerate() {
+                                if let Some(rate_str) = opt {
+                                    let key = format!("pin:{}:out:{}", node_id, i);
+                                    self.snarl_viewer.edit_buffers.insert(key, rate_str.clone());
+                                }
+                            }
                             break;
                         }
                     }
                 }
+            }
+
+            // Debug: report refreshed nodes and some of their values so user sees immediate feedback in terminal
+            if !nodes_to_refresh.is_empty() {
+                let mut parts: Vec<String> = Vec::new();
+                for nid in &nodes_to_refresh {
+                    if let Some((cnt, _)) = self.production_app.get_node_building_info(*nid) {
+                        parts.push(format!("{}->{}", nid, cnt));
+                    } else {
+                        parts.push(format!("{}->n/a", nid));
+                    }
+                }
+                eprintln!("[UI] refreshed nodes: {}", parts.join(", "));
             }
         });
     }

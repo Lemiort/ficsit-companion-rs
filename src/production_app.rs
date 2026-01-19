@@ -217,6 +217,36 @@ impl ProductionApp {
         None
     }
 
+    /// Map node/direction/index to the internal pin id (if present)
+    pub fn get_pin_id(&self, node_id: u64, direction: PinDirection, idx: usize) -> Option<u64> {
+        let node_idx = self.find_node_index(node_id)?;
+        let node_any = &self.nodes[node_idx];
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            match direction {
+                PinDirection::Input => n.base.ins.get(idx).map(|p| p.id),
+                PinDirection::Output => n.base.outs.get(idx).map(|p| p.id),
+            }
+        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+            match direction {
+                PinDirection::Input => n.base.ins.get(idx).map(|p| p.id),
+                PinDirection::Output => n.base.outs.get(idx).map(|p| p.id),
+            }
+        } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+            match direction {
+                PinDirection::Input => n.base.ins.get(idx).map(|p| p.id),
+                PinDirection::Output => n.base.outs.get(idx).map(|p| p.id),
+            }
+        } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+            if direction == PinDirection::Input {
+                n.base.ins.get(idx).map(|p| p.id)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
     pub fn get_node_building_info(&self, node_id: u64) -> Option<(String, String)> {
         let idx = self.find_node_index(node_id)?;
         let node_any = &self.nodes[idx];
@@ -293,6 +323,54 @@ impl ProductionApp {
         Err("Unsupported node kind for somersloop edit".into())
     }
 
+    /// Set the current number of buildings for a craft node (node rate). This triggers propagation to connected graph.
+    pub fn set_node_building_count(
+        &mut self,
+        node_id: u64,
+        new_count: crate::fractional_number::FractionalNumber,
+    ) -> Result<(), String> {
+        // Validate non-negative
+        if new_count.numerator() < 0 {
+            return Err("Invalid count".into());
+        }
+        let idx = self
+            .find_node_index(node_id)
+            .ok_or_else(|| format!("Node {} not found", node_id))?;
+        let node_any = &mut self.nodes[idx];
+        if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+            // Apply new node rate
+            let pin_id = {
+                n.update_rate(new_count);
+                // prefer an output pin when available
+                if !n.base.outs.is_empty() {
+                    n.base.outs[0].id
+                } else if !n.base.ins.is_empty() {
+                    n.base.ins[0].id
+                } else {
+                    // no pins to propagate from - nothing to do
+                    return Ok(());
+                }
+            };
+            // Re-query the updated pin rate after borrow drop
+            let cur = if let Some(n2) = self.nodes[idx].downcast_ref::<CraftNode>() {
+                if !n2.base.outs.is_empty() {
+                    n2.base.outs[0].current_rate
+                } else if !n2.base.ins.is_empty() {
+                    n2.base.ins[0].current_rate
+                } else {
+                    crate::fractional_number::FractionalNumber::default()
+                }
+            } else {
+                crate::fractional_number::FractionalNumber::default()
+            };
+            // Propagate through graph using the selected pin as constraint
+            self.update_nodes_rate(pin_id, cur)
+                .map_err(|e| format!("Failed to propagate rates: {}", e))?;
+            return Ok(());
+        }
+        Err("Unsupported node kind for building count edit".into())
+    }
+
     /// Get build progress for a group node: (built_count, total_craft_nodes)
     pub fn get_node_build_progress(&self, node_id: u64) -> Option<(usize, usize)> {
         let start_idx = self.find_node_index(node_id)?;
@@ -353,14 +431,15 @@ impl ProductionApp {
         if !crate::rate_calculator::validate_rate(&new_rate) {
             return Err("Invalid rate".into());
         }
+        eprintln!("[PROD] set_pin_rate called: node={} dir={:?} idx={} new={}", node_id, direction, pin_index, new_rate.to_fraction_string());
 
         let node_idx = self
             .find_node_index(node_id)
             .ok_or_else(|| format!("Node {} not found", node_id))?;
-        let node_any = &mut self.nodes[node_idx];
+
 
         // CraftNode: if setting an output's rate, derive the node rate
-        if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+        if let Some(n) = self.nodes[node_idx].downcast_mut::<CraftNode>() {
             match direction {
                 PinDirection::Output => {
                     if pin_index >= n.base.outs.len() {
@@ -374,67 +453,156 @@ impl ProductionApp {
                     if !crate::rate_calculator::validate_rate(&new_node_rate) {
                         return Err("Derived node rate invalid".into());
                     }
-                    n.update_rate(new_node_rate);
+                    // Update node then propagate after dropping the borrow
+                    let pin_id = {
+                        n.update_rate(new_node_rate);
+                        n.base.outs[pin_index].id
+                    };
+                    self.update_nodes_rate(pin_id, {
+                        // re-query current_rate after borrow dropped
+                        let cur = if let Some(n2) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
+                            n2.base.outs[pin_index].current_rate
+                        } else {
+                            FractionalNumber::default()
+                        };
+                        cur
+                    })
+                    .map_err(|e| format!("Failed to propagate rates: {}", e))?;
+                    eprintln!("[PROD] set_pin_rate success: node={} dir=Output idx={}", node_id, pin_index);
                     return Ok(());
                 }
                 PinDirection::Input => {
                     if pin_index >= n.base.ins.len() {
                         return Err("Input pin out of range".into());
                     }
-                    n.base.ins[pin_index].current_rate = new_rate;
+                    let pin_id = {
+                        n.base.ins[pin_index].current_rate = new_rate;
+                        n.base.ins[pin_index].id
+                    };
+                    self.update_nodes_rate(pin_id, {
+                        let cur = if let Some(n2) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
+                            n2.base.ins[pin_index].current_rate
+                        } else {
+                            FractionalNumber::default()
+                        };
+                        cur
+                    })
+                    .map_err(|e| format!("Failed to propagate rates: {}", e))?;
+                    eprintln!("[PROD] set_pin_rate success: node={} dir=Input idx={}", node_id, pin_index);
                     return Ok(());
                 }
             }
         }
 
         // Organizer nodes: set directly
-        if let Some(n) = node_any.downcast_mut::<OrganizerNode>() {
+        if let Some(n) = self.nodes[node_idx].downcast_mut::<OrganizerNode>() {
             match direction {
                 PinDirection::Input => {
                     if pin_index >= n.base.ins.len() {
                         return Err("Input pin out of range".into());
                     }
-                    n.base.ins[pin_index].current_rate = new_rate;
+                    let pin_id = {
+                        n.base.ins[pin_index].current_rate = new_rate;
+                        n.base.ins[pin_index].id
+                    };
+                    // drop mutable borrow
+                    drop(n);
+                    let cur = if let Some(n2) = self.nodes[self.find_node_index(node_id).unwrap()].downcast_ref::<OrganizerNode>() {
+                        n2.base.ins[pin_index].current_rate
+                    } else {
+                        FractionalNumber::default()
+                    };
+                    self.update_nodes_rate(pin_id, cur)
+                        .map_err(|e| format!("Failed to propagate rates: {}", e))?;
                     return Ok(());
                 }
                 PinDirection::Output => {
                     if pin_index >= n.base.outs.len() {
                         return Err("Output pin out of range".into());
                     }
-                    n.base.outs[pin_index].current_rate = new_rate;
+                    let pin_id = {
+                        n.base.outs[pin_index].current_rate = new_rate;
+                        n.base.outs[pin_index].id
+                    };
+                    // drop mutable borrow
+                    drop(n);
+                    let cur = if let Some(n2) = self.nodes[self.find_node_index(node_id).unwrap()].downcast_ref::<OrganizerNode>() {
+                        n2.base.outs[pin_index].current_rate
+                    } else {
+                        FractionalNumber::default()
+                    };
+                    self.update_nodes_rate(pin_id, cur)
+                        .map_err(|e| format!("Failed to propagate rates: {}", e))?;
                     return Ok(());
                 }
             }
         }
 
         // Group/Sink: set directly
-        if let Some(n) = node_any.downcast_mut::<GroupNode>() {
+        if let Some(n) = self.nodes[node_idx].downcast_mut::<GroupNode>() {
             match direction {
                 PinDirection::Input => {
                     if pin_index >= n.base.ins.len() {
                         return Err("Input pin out of range".into());
                     }
-                    n.base.ins[pin_index].current_rate = new_rate;
+                    let pin_id = {
+                        n.base.ins[pin_index].current_rate = new_rate;
+                        n.base.ins[pin_index].id
+                    };
+                    // drop mutable borrow
+                    drop(n);
+                    let cur = if let Some(n2) = self.nodes[self.find_node_index(node_id).unwrap()].downcast_ref::<GroupNode>() {
+                        n2.base.ins[pin_index].current_rate
+                    } else {
+                        FractionalNumber::default()
+                    };
+                    self.update_nodes_rate(pin_id, cur)
+                        .map_err(|e| format!("Failed to propagate rates: {}", e))?;
                     return Ok(());
                 }
                 PinDirection::Output => {
                     if pin_index >= n.base.outs.len() {
                         return Err("Output pin out of range".into());
                     }
-                    n.base.outs[pin_index].current_rate = new_rate;
+                    let pin_id = {
+                        n.base.outs[pin_index].current_rate = new_rate;
+                        n.base.outs[pin_index].id
+                    };
+                    // drop mutable borrow
+                    drop(n);
+                    let cur = if let Some(n2) = self.nodes[self.find_node_index(node_id).unwrap()].downcast_ref::<GroupNode>() {
+                        n2.base.outs[pin_index].current_rate
+                    } else {
+                        FractionalNumber::default()
+                    };
+                    self.update_nodes_rate(pin_id, cur)
+                        .map_err(|e| format!("Failed to propagate rates: {}", e))?;
                     return Ok(());
                 }
             }
         }
 
-        if let Some(n) = node_any.downcast_mut::<SinkNode>() {
+        if let Some(n) = self.nodes[node_idx].downcast_mut::<SinkNode>() {
             if direction != PinDirection::Input {
                 return Err("Sink has no outputs".into());
             }
             if pin_index >= n.base.ins.len() {
                 return Err("Input pin out of range".into());
             }
-            n.base.ins[pin_index].current_rate = new_rate;
+            let pin_id = {
+                n.base.ins[pin_index].current_rate = new_rate;
+                n.base.ins[pin_index].id
+            };
+            // drop mutable borrow
+            drop(n);
+            let cur = if let Some(n2) = self.nodes[self.find_node_index(node_id).unwrap()].downcast_ref::<SinkNode>() {
+                n2.base.ins[pin_index].current_rate
+            } else {
+                FractionalNumber::default()
+            };
+            self.update_nodes_rate(pin_id, cur)
+                .map_err(|e| format!("Failed to propagate rates: {}", e))?;
+            eprintln!("[PROD] set_pin_rate success: sink node={} idx={}", node_id, pin_index);
             return Ok(());
         }
 
@@ -664,7 +832,8 @@ impl ProductionApp {
     }
 
     /// Create a link between two pins
-    pub fn create_link(&mut self, start_pin_id: u64, end_pin_id: u64) -> Result<u64, String> {
+    /// Returns (link_id, optional_propagation_warning)
+    pub fn create_link(&mut self, start_pin_id: u64, end_pin_id: u64) -> Result<(u64, Option<String>), String> {
         // Validate pins exist
         let _start_loc = self
             .find_pin_location(start_pin_id)
@@ -729,7 +898,245 @@ impl ProductionApp {
             }
         }
 
-        Ok(link_id)
+        // Attempt guarded propagation on link creation: snapshot pin rates and lock states,
+        // try to propagate, and if propagation fails restore the snapshot but keep the link.
+        let start_rate = {
+            if let Some((node_id, direction, pi)) = self.find_pin_location(start_pin_id) {
+                let ni = self.find_node_index(node_id).unwrap();
+                if let Some(n) = self.nodes[ni].downcast_ref::<CraftNode>() {
+                    match direction {
+                        PinDirection::Input => n.base.ins[pi].current_rate,
+                        PinDirection::Output => n.base.outs[pi].current_rate,
+                    }
+                } else if let Some(n) = self.nodes[ni].downcast_ref::<OrganizerNode>() {
+                    match direction {
+                        PinDirection::Input => n.base.ins[pi].current_rate,
+                        PinDirection::Output => n.base.outs[pi].current_rate,
+                    }
+                } else if let Some(n) = self.nodes[ni].downcast_ref::<GroupNode>() {
+                    match direction {
+                        PinDirection::Input => n.base.ins[pi].current_rate,
+                        PinDirection::Output => n.base.outs[pi].current_rate,
+                    }
+                } else if let Some(n) = self.nodes[ni].downcast_ref::<SinkNode>() {
+                    n.base.ins[pi].current_rate
+                } else {
+                    FractionalNumber::default()
+                }
+            } else {
+                FractionalNumber::default()
+            }
+        };
+
+        // Snapshot all pin rates and locks so we can restore if propagation fails
+        let mut snapshot: std::collections::HashMap<u64, (FractionalNumber, bool)> = std::collections::HashMap::new();
+        for node_any in &self.nodes {
+            if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                    snapshot.insert(p.id, (p.current_rate, p.locked));
+                }
+            } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                    snapshot.insert(p.id, (p.current_rate, p.locked));
+                }
+            } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                    snapshot.insert(p.id, (p.current_rate, p.locked));
+                }
+            } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+                for p in n.base.ins.iter() {
+                    snapshot.insert(p.id, (p.current_rate, p.locked));
+                }
+            }
+        }
+
+        let mut propagate_warning: Option<String> = None;
+        if let Err(e) = self.update_nodes_rate(start_pin_id, start_rate) {
+            // Restore snapshot (rates and locks) to avoid partial propagation state
+            for (pid, (rate, locked)) in snapshot.into_iter() {
+                if let Some((node_id, direction, idx)) = self.find_pin_location(pid) {
+                    let ni = self.find_node_index(node_id).unwrap();
+                    if let Some(n) = self.nodes[ni].downcast_mut::<CraftNode>() {
+                        match direction {
+                            PinDirection::Input => { n.base.ins[idx].current_rate = rate; n.base.ins[idx].locked = locked; }
+                            PinDirection::Output => { n.base.outs[idx].current_rate = rate; n.base.outs[idx].locked = locked; }
+                        }
+                    } else if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                        match direction {
+                            PinDirection::Input => { n.base.ins[idx].current_rate = rate; n.base.ins[idx].locked = locked; }
+                            PinDirection::Output => { n.base.outs[idx].current_rate = rate; n.base.outs[idx].locked = locked; }
+                        }
+                    } else if let Some(n) = self.nodes[ni].downcast_mut::<GroupNode>() {
+                        match direction {
+                            PinDirection::Input => { n.base.ins[idx].current_rate = rate; n.base.ins[idx].locked = locked; }
+                            PinDirection::Output => { n.base.outs[idx].current_rate = rate; n.base.outs[idx].locked = locked; }
+                        }
+                    } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+                        n.base.ins[idx].current_rate = rate; n.base.ins[idx].locked = locked;
+                    }
+                }
+            }
+            // Keep the link but record the propagation failure so caller can surface it
+            propagate_warning = Some(format!("Propagation failed: {}", e));
+        }
+
+        // Set lock state
+        if let Some((_n, _d, _pi)) = self.find_pin_location(start_pin_id) {
+            if let Some((node_id, direction, pi)) = self.find_pin_location(start_pin_id) {
+                let ni = self.find_node_index(node_id).unwrap();
+                let start_locked = if let Some(n) = self.nodes[ni].downcast_ref::<CraftNode>() {
+                    match direction {
+                        PinDirection::Input => n.base.ins[pi].locked,
+                        PinDirection::Output => n.base.outs[pi].locked,
+                    }
+                } else if let Some(n) = self.nodes[ni].downcast_ref::<OrganizerNode>() {
+                    match direction {
+                        PinDirection::Input => n.base.ins[pi].locked,
+                        PinDirection::Output => n.base.outs[pi].locked,
+                    }
+                } else if let Some(n) = self.nodes[ni].downcast_ref::<GroupNode>() {
+                    match direction {
+                        PinDirection::Input => n.base.ins[pi].locked,
+                        PinDirection::Output => n.base.outs[pi].locked,
+                    }
+                } else if let Some(n) = self.nodes[ni].downcast_ref::<SinkNode>() {
+                    n.base.ins[pi].locked
+                } else {
+                    false
+                };
+
+                if let Some((node_id, direction, pi)) = self.find_pin_location(end_pin_id) {
+                    let ni = self.find_node_index(node_id).unwrap();
+                    let end_locked = if let Some(n) = self.nodes[ni].downcast_ref::<CraftNode>() {
+                        match direction {
+                            PinDirection::Input => n.base.ins[pi].locked,
+                            PinDirection::Output => n.base.outs[pi].locked,
+                        }
+                    } else if let Some(n) = self.nodes[ni].downcast_ref::<OrganizerNode>() {
+                        match direction {
+                            PinDirection::Input => n.base.ins[pi].locked,
+                            PinDirection::Output => n.base.outs[pi].locked,
+                        }
+                    } else if let Some(n) = self.nodes[ni].downcast_ref::<GroupNode>() {
+                        match direction {
+                            PinDirection::Input => n.base.ins[pi].locked,
+                            PinDirection::Output => n.base.outs[pi].locked,
+                        }
+                    } else if let Some(n) = self.nodes[ni].downcast_ref::<SinkNode>() {
+                        n.base.ins[pi].locked
+                    } else {
+                        false
+                    };
+
+                    if start_locked || end_locked {
+                        if let Some((node_id, direction, pi)) = self.find_pin_location(start_pin_id) {
+                            let ni = self.find_node_index(node_id).unwrap();
+                            if let Some(n) = self.nodes[ni].downcast_mut::<CraftNode>() {
+                                match direction {
+                                    PinDirection::Input => n.base.ins[pi].locked = true,
+                                    PinDirection::Output => n.base.outs[pi].locked = true,
+                                }
+                            } else if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                                match direction {
+                                    PinDirection::Input => n.base.ins[pi].locked = true,
+                                    PinDirection::Output => n.base.outs[pi].locked = true,
+                                }
+                            } else if let Some(n) = self.nodes[ni].downcast_mut::<GroupNode>() {
+                                match direction {
+                                    PinDirection::Input => n.base.ins[pi].locked = true,
+                                    PinDirection::Output => n.base.outs[pi].locked = true,
+                                }
+                            } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+                                n.base.ins[pi].locked = true;
+                            }
+                        }
+
+                        if let Some((node_id, direction, pi)) = self.find_pin_location(end_pin_id) {
+                            let ni = self.find_node_index(node_id).unwrap();
+                            if let Some(n) = self.nodes[ni].downcast_mut::<CraftNode>() {
+                                match direction {
+                                    PinDirection::Input => n.base.ins[pi].locked = true,
+                                    PinDirection::Output => n.base.outs[pi].locked = true,
+                                }
+                            } else if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                                match direction {
+                                    PinDirection::Input => n.base.ins[pi].locked = true,
+                                    PinDirection::Output => n.base.outs[pi].locked = true,
+                                }
+                            } else if let Some(n) = self.nodes[ni].downcast_mut::<GroupNode>() {
+                                match direction {
+                                    PinDirection::Input => n.base.ins[pi].locked = true,
+                                    PinDirection::Output => n.base.outs[pi].locked = true,
+                                }
+                            } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+                                n.base.ins[pi].locked = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Set items for organizer nodes (compute candidate items first to avoid overlapping borrows)
+        if let Some((org_node_id, _dir, _)) = self.find_pin_location(start_pin_id) {
+            // Candidate item from the other endpoint
+            if let Some((other_node_id, _other_dir, pi)) = self.find_pin_location(end_pin_id) {
+                let candidate_item = if let Some(end_n) = self.nodes[self.find_node_index(other_node_id).unwrap()].downcast_ref::<CraftNode>() {
+                    end_n.base.outs.get(pi).and_then(|p| p.item_name.clone())
+                } else if let Some(end_n) = self.nodes[self.find_node_index(other_node_id).unwrap()].downcast_ref::<OrganizerNode>() {
+                    end_n.base.outs.get(pi).and_then(|p| p.item_name.clone())
+                } else {
+                    None
+                };
+
+                if let Some(item) = candidate_item {
+                    let org_idx = self.find_node_index(org_node_id).unwrap();
+                    if let Some(n) = self.nodes[org_idx].downcast_mut::<OrganizerNode>() {
+                        if n.item_name.is_none() {
+                            n.item_name = Some(item);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((org_node_id, _dir, _)) = self.find_pin_location(end_pin_id) {
+            if let Some((other_node_id, _other_dir, pi)) = self.find_pin_location(start_pin_id) {
+                let candidate_item = if let Some(start_n) = self.nodes[self.find_node_index(other_node_id).unwrap()].downcast_ref::<CraftNode>() {
+                    start_n.base.outs.get(pi).and_then(|p| p.item_name.clone())
+                } else if let Some(start_n) = self.nodes[self.find_node_index(other_node_id).unwrap()].downcast_ref::<OrganizerNode>() {
+                    start_n.base.outs.get(pi).and_then(|p| p.item_name.clone())
+                } else {
+                    None
+                };
+
+                if let Some(item) = candidate_item {
+                    let org_idx = self.find_node_index(org_node_id).unwrap();
+                    if let Some(n) = self.nodes[org_idx].downcast_mut::<OrganizerNode>() {
+                        if n.item_name.is_none() {
+                            n.item_name = Some(item);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some((node_id, _direction, _)) = self.find_pin_location(end_pin_id) {
+            if self.nodes[self.find_node_index(node_id).unwrap()].downcast_ref::<SinkNode>().is_some() {
+                if let Some((other_node_id, _other_dir, pi)) = self.find_pin_location(start_pin_id) {
+                    if let Some(start_n) = self.nodes[self.find_node_index(other_node_id).unwrap()].downcast_ref::<CraftNode>() {
+                        if let Some(item) = start_n.base.outs.get(pi).and_then(|p| p.item_name.clone()) {
+                            let sink_idx = self.find_node_index(node_id).unwrap();
+                            if let Some(n) = self.nodes[sink_idx].downcast_mut::<SinkNode>() {
+                                n.item_name = Some(item);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok((link_id, propagate_warning))
     }
 
     /// Delete a link by ID
@@ -1201,6 +1608,549 @@ impl ProductionApp {
         Ok(())
     }
 
+    /// Propagate production rate changes through the graph starting at a pin.
+    /// Returns Err(...) if constraints are contradictory or solver fails.
+    pub fn update_nodes_rate(
+        &mut self,
+        constraint_pin_id: u64,
+        constraint_value: FractionalNumber,
+    ) -> Result<(), String> {
+        use std::collections::{HashSet, VecDeque};
+
+        // Reset pin errors for all pins
+        for node_any in &mut self.nodes {
+            if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+                for p in &mut n.base.ins {
+                    p.error = false;
+                }
+                for p in &mut n.base.outs {
+                    p.error = false;
+                }
+            } else if let Some(n) = node_any.downcast_mut::<OrganizerNode>() {
+                for p in &mut n.base.ins {
+                    p.error = false;
+                }
+                for p in &mut n.base.outs {
+                    p.error = false;
+                }
+            } else if let Some(n) = node_any.downcast_mut::<GroupNode>() {
+                for p in &mut n.base.ins {
+                    p.error = false;
+                }
+                for p in &mut n.base.outs {
+                    p.error = false;
+                }
+            } else if let Some(n) = node_any.downcast_mut::<SinkNode>() {
+                for p in &mut n.base.ins {
+                    p.error = false;
+                }
+            }
+        }
+
+        eprintln!("[PROD] update_nodes_rate called: constraint_pin={} value={}", constraint_pin_id, constraint_value.to_fraction_string());
+        // Collect relevant pins via BFS starting from constraint_pin_id
+        let mut queue: VecDeque<u64> = VecDeque::new();
+        let mut visited: HashSet<u64> = HashSet::new();
+        queue.push_back(constraint_pin_id);
+
+        while let Some(pid) = queue.pop_front() {
+            if !visited.insert(pid) {
+                continue;
+            }
+
+            // Add pins from the same node depending on node kind
+            if let Some((node_id, _dir, _idx)) = self.find_pin_location(pid) {
+                if let Some(ni) = self.find_node_index(node_id) {
+                    let node_any = &self.nodes[ni];
+                    if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                        for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                            if !visited.contains(&p.id) {
+                                queue.push_back(p.id);
+                            }
+                        }
+                    } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                        for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                            if !visited.contains(&p.id) {
+                                queue.push_back(p.id);
+                            }
+                        }
+                    } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                        for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                            if !visited.contains(&p.id) {
+                                queue.push_back(p.id);
+                            }
+                        }
+                    } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+                        for p in n.base.ins.iter() {
+                            if !visited.contains(&p.id) {
+                                queue.push_back(p.id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Follow links to connected pins
+            if let Some(link) = self.find_link_by_pin(pid) {
+                let other = if link.start_pin_id == pid {
+                    link.end_pin_id
+                } else {
+                    link.start_pin_id
+                };
+                if !visited.contains(&other) {
+                    queue.push_back(other);
+                }
+            }
+        }
+
+        let relevant_pins: Vec<u64> = visited.into_iter().collect();
+
+        // Build variable mapping: for craft/group/game-splitter -> one variable per NODE (ratio = pin.base_rate)
+        // for Merger/CustomSplitter/Sink -> one variable per PIN (ratio = 1)
+        // Map: pin_id -> (var_index, ratio)
+        let mut pin_to_var: std::collections::HashMap<u64, (usize, FractionalNumber)> =
+            std::collections::HashMap::new();
+        let mut var_idx = 0usize;
+        let mut locked_rates: std::collections::HashMap<u64, FractionalNumber> = std::collections::HashMap::new();
+
+        // Track nodes that already have a variable (for craft/group/game splitter)
+        let mut node_has_var: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+
+        for pid in &relevant_pins {
+            if let Some((node_id, direction, idx)) = self.find_pin_location(*pid) {
+                if let Some(ni) = self.find_node_index(node_id) {
+                    let node_any = &self.nodes[ni];
+                    let p_locked = if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                        match direction {
+                            PinDirection::Input => n.base.ins[idx].locked,
+                            PinDirection::Output => n.base.outs[idx].locked,
+                        }
+                    } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                        match direction {
+                            PinDirection::Input => n.base.ins[idx].locked,
+                            PinDirection::Output => n.base.outs[idx].locked,
+                        }
+                    } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                        match direction {
+                            PinDirection::Input => n.base.ins[idx].locked,
+                            PinDirection::Output => n.base.outs[idx].locked,
+                        }
+                    } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+                        n.base.ins[idx].locked
+                    } else {
+                        false
+                    };
+
+                    let current_rate = if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                        match direction {
+                            PinDirection::Input => n.base.ins[idx].current_rate,
+                            PinDirection::Output => n.base.outs[idx].current_rate,
+                        }
+                    } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                        match direction {
+                            PinDirection::Input => n.base.ins[idx].current_rate,
+                            PinDirection::Output => n.base.outs[idx].current_rate,
+                        }
+                    } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                        match direction {
+                            PinDirection::Input => n.base.ins[idx].current_rate,
+                            PinDirection::Output => n.base.outs[idx].current_rate,
+                        }
+                    } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+                        n.base.ins[idx].current_rate
+                    } else {
+                        FractionalNumber::default()
+                    };
+
+                    if p_locked {
+                        locked_rates.insert(*pid, current_rate);
+                        continue;
+                    }
+
+                    // For craft/group/game splitter, use one variable per node with ratio = pin.base_rate
+                    if node_any.downcast_ref::<CraftNode>().is_some()
+                        || node_any.downcast_ref::<GroupNode>().is_some()
+                        || (node_any.downcast_ref::<OrganizerNode>().is_some()
+                            && {
+                                let n = node_any.downcast_ref::<OrganizerNode>().unwrap();
+                                n.base.kind == NodeKind::GameSplitter
+                            })
+                    {
+                        if let Some(&vi) = node_has_var.get(&node_id) {
+                            // Use existing var index
+                            let ratio = if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                                match direction {
+                                    PinDirection::Input => n.base.ins[idx].base_rate,
+                                    PinDirection::Output => n.base.outs[idx].base_rate,
+                                }
+                            } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                                match direction {
+                                    PinDirection::Input => n.base.ins[idx].base_rate,
+                                    PinDirection::Output => n.base.outs[idx].base_rate,
+                                }
+                            } else {
+                                // GameSplitter treated like other nodes
+                                let n = node_any.downcast_ref::<OrganizerNode>().unwrap();
+                                match direction {
+                                    PinDirection::Input => n.base.ins[idx].base_rate,
+                                    PinDirection::Output => n.base.outs[idx].base_rate,
+                                }
+                            };
+                            pin_to_var.insert(*pid, (vi, ratio));
+                        } else {
+                            // Assign new var for this node
+                            let vi = var_idx;
+                            var_idx += 1;
+                            node_has_var.insert(node_id, vi);
+                            let ratio = if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                                match direction {
+                                    PinDirection::Input => n.base.ins[idx].base_rate,
+                                    PinDirection::Output => n.base.outs[idx].base_rate,
+                                }
+                            } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                                match direction {
+                                    PinDirection::Input => n.base.ins[idx].base_rate,
+                                    PinDirection::Output => n.base.outs[idx].base_rate,
+                                }
+                            } else {
+                                let n = node_any.downcast_ref::<OrganizerNode>().unwrap();
+                                match direction {
+                                    PinDirection::Input => n.base.ins[idx].base_rate,
+                                    PinDirection::Output => n.base.outs[idx].base_rate,
+                                }
+                            };
+                            pin_to_var.insert(*pid, (vi, ratio));
+                        }
+                    }
+                    // For Merger/CustomSplitter/Sink: one variable per pin, ratio = 1
+                    else if node_any.downcast_ref::<OrganizerNode>().is_some()
+                        || node_any.downcast_ref::<SinkNode>().is_some()
+                    {
+                        let vi = var_idx;
+                        var_idx += 1;
+                        pin_to_var.insert(*pid, (vi, FractionalNumber::new(1, 1)));
+                    }
+                }
+            }
+        }
+
+        // If there are no variables, just check locked consistency across links and still update touched nodes
+        if pin_to_var.is_empty() {
+            for link in &self.links {
+                if relevant_pins.contains(&link.start_pin_id) && relevant_pins.contains(&link.end_pin_id) {
+                    let (s_node, s_dir, s_idx) = self.find_pin_location(link.start_pin_id).unwrap();
+                    let (e_node, e_dir, e_idx) = self.find_pin_location(link.end_pin_id).unwrap();
+                    let s_rate = if let Some(n) = self.nodes[self.find_node_index(s_node).unwrap()].downcast_ref::<CraftNode>() {
+                        match s_dir { PinDirection::Input => n.base.ins[s_idx].current_rate, PinDirection::Output => n.base.outs[s_idx].current_rate }
+                    } else if let Some(n) = self.nodes[self.find_node_index(s_node).unwrap()].downcast_ref::<OrganizerNode>() {
+                        match s_dir { PinDirection::Input => n.base.ins[s_idx].current_rate, PinDirection::Output => n.base.outs[s_idx].current_rate }
+                    } else if let Some(n) = self.nodes[self.find_node_index(s_node).unwrap()].downcast_ref::<GroupNode>() {
+                        match s_dir { PinDirection::Input => n.base.ins[s_idx].current_rate, PinDirection::Output => n.base.outs[s_idx].current_rate }
+                    } else if let Some(n) = self.nodes[self.find_node_index(s_node).unwrap()].downcast_ref::<SinkNode>() {
+                        n.base.ins[s_idx].current_rate
+                    } else { FractionalNumber::default() };
+
+                    let e_rate = if let Some(n) = self.nodes[self.find_node_index(e_node).unwrap()].downcast_ref::<CraftNode>() {
+                        match e_dir { PinDirection::Input => n.base.ins[e_idx].current_rate, PinDirection::Output => n.base.outs[e_idx].current_rate }
+                    } else if let Some(n) = self.nodes[self.find_node_index(e_node).unwrap()].downcast_ref::<OrganizerNode>() {
+                        match e_dir { PinDirection::Input => n.base.ins[e_idx].current_rate, PinDirection::Output => n.base.outs[e_idx].current_rate }
+                    } else if let Some(n) = self.nodes[self.find_node_index(e_node).unwrap()].downcast_ref::<GroupNode>() {
+                        match e_dir { PinDirection::Input => n.base.ins[e_idx].current_rate, PinDirection::Output => n.base.outs[e_idx].current_rate }
+                    } else if let Some(n) = self.nodes[self.find_node_index(e_node).unwrap()].downcast_ref::<SinkNode>() {
+                        n.base.ins[e_idx].current_rate
+                    } else { FractionalNumber::default() };
+
+                    if s_rate != e_rate {
+                        return Err("Contradictory locked rates".into());
+                    }
+                }
+            }
+
+            // Even without variables, some nodes may be touched (single-node edits). Recompute node rates from pins for touched nodes
+            for node_any in &mut self.nodes {
+                if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+                    // Prefer outputs for craft nodes when available
+                    if !n.base.outs.is_empty() {
+                        let mut chosen: Option<(FractionalNumber, FractionalNumber)> = None;
+                        for p in &n.base.outs {
+                            if relevant_pins.contains(&p.id) {
+                                let denom = p.base_rate * (FractionalNumber::new(1, 1) + n.num_somersloop * n.somersloop_mult);
+                                if denom.numerator() != 0 {
+                                    chosen = Some((p.current_rate / denom, p.current_rate));
+                                    break;
+                                }
+                            }
+                        }
+                        if chosen.is_none() {
+                            for p in &n.base.outs {
+                                if p.base_rate.numerator() != 0 {
+                                    chosen = Some((p.current_rate / p.base_rate, p.current_rate));
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some((new_node_rate, _)) = chosen {
+                            if new_node_rate != n.current_rate {
+                                n.update_rate(new_node_rate);
+                            }
+                        }
+                    } else if !n.base.ins.is_empty() {
+                        for p in &n.base.ins {
+                            if p.base_rate.numerator() != 0 {
+                                let new_node_rate = p.current_rate / p.base_rate;
+                                if new_node_rate != n.current_rate {
+                                    n.update_rate(new_node_rate);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                } else if let Some(n) = node_any.downcast_mut::<GroupNode>() {
+                    let mut chosen: Option<FractionalNumber> = None;
+                    for p in &n.base.outs {
+                        if relevant_pins.contains(&p.id) && p.base_rate.numerator() != 0 {
+                            chosen = Some(p.current_rate / p.base_rate);
+                            break;
+                        }
+                    }
+                    if chosen.is_none() {
+                        for p in &n.base.ins {
+                            if relevant_pins.contains(&p.id) && p.base_rate.numerator() != 0 {
+                                chosen = Some(p.current_rate / p.base_rate);
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(new_node_rate) = chosen {
+                        if new_node_rate != n.current_rate {
+                            n.current_rate = new_node_rate;
+                            // Propagate to pins
+                            for p in &mut n.base.ins {
+                                p.current_rate = p.base_rate * n.current_rate;
+                            }
+                            for p in &mut n.base.outs {
+                                p.current_rate = p.base_rate * n.current_rate;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return Ok(());
+        }
+
+        // Build equations and constants
+        let num_vars = var_idx; // number of variables (we assigned indices sequentially)
+        let mut equations: Vec<Vec<FractionalNumber>> = Vec::new();
+        let mut constants: Vec<FractionalNumber> = Vec::new();
+
+        // Equality per link: start_rate - end_rate = 0 (taking ratios into account)
+        for link in &self.links {
+            if !(relevant_pins.contains(&link.start_pin_id) && relevant_pins.contains(&link.end_pin_id)) {
+                continue;
+            }
+            let s = link.start_pin_id;
+            let e = link.end_pin_id;
+            let mut eq = vec![FractionalNumber::new(0, 1); num_vars];
+            let mut constant = FractionalNumber::new(0, 1);
+
+            if let Some((si, sratio)) = pin_to_var.get(&s).copied() {
+                eq[si] = eq[si].clone() + sratio;
+            } else if let Some(rate) = locked_rates.get(&s) {
+                constant = constant - rate.clone();
+            }
+
+            if let Some((ei, eratio)) = pin_to_var.get(&e).copied() {
+                eq[ei] = eq[ei].clone() + (FractionalNumber::new(-1, 1) * eratio);
+            } else if let Some(rate) = locked_rates.get(&e) {
+                constant = constant + rate.clone();
+            }
+
+            // If equation is all zeros and constant non-zero -> contradiction
+            if eq.iter().all(|c| c.numerator() == 0) && constant.numerator() != 0 {
+                return Err("Contradictory locked rates".into());
+            }
+
+            equations.push(eq);
+            constants.push(constant);
+        }
+
+        // Organizer node: sum(inputs) - sum(outputs) = 0 (use ratios)
+        for node_any in &self.nodes {
+            if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                // If any pin of this node is in relevant set, build sum constraint
+                let mut touched = false;
+                for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                    if relevant_pins.contains(&p.id) {
+                        touched = true;
+                        break;
+                    }
+                }
+                if !touched {
+                    continue;
+                }
+
+                let mut eq = vec![FractionalNumber::new(0, 1); num_vars];
+                let mut constant = FractionalNumber::new(0, 1);
+
+                for p in &n.base.ins {
+                    if let Some((vi, ratio)) = pin_to_var.get(&p.id).copied() {
+                        eq[vi] = eq[vi].clone() + ratio;
+                    } else {
+                        constant = constant - p.current_rate.clone();
+                    }
+                }
+                for p in &n.base.outs {
+                    if let Some((vi, ratio)) = pin_to_var.get(&p.id).copied() {
+                        eq[vi] = eq[vi].clone() + (FractionalNumber::new(-1, 1) * ratio);
+                    } else {
+                        constant = constant + p.current_rate.clone();
+                    }
+                }
+
+                if eq.iter().all(|c| c.numerator() == 0) && constant.numerator() != 0 {
+                    return Err("Contradictory locked rates on organizer".into());
+                }
+
+                equations.push(eq);
+                constants.push(constant);
+            }
+        }
+
+        // Add the constraint for the user-provided pin value (pin = constraint_value)
+        if let Some((vi, ratio)) = pin_to_var.get(&constraint_pin_id).copied() {
+            let mut eq = vec![FractionalNumber::new(0, 1); num_vars];
+            // vi * ratio = constraint_value
+            eq[vi] = ratio;
+            equations.push(eq);
+            constants.push(constraint_value.clone());
+        } else if let Some(r) = locked_rates.get(&constraint_pin_id) {
+            if *r != constraint_value {
+                return Err("Contradiction with locked constraint value".into());
+            }
+        } else {
+            // Should not happen: constraint pin not in relevant set
+            return Err("Constraint pin not part of propagation set".into());
+        }
+
+        if equations.is_empty() {
+            return Err("No equations to solve".into());
+        }
+
+        // Solve system
+        let solver = crate::rate_calculator::LinearSolver::new(equations.clone(), constants.clone())
+            .map_err(|e| format!("Solver setup failed: {}", e))?;
+        let solution = solver.solve().map_err(|e| format!("Solver error: {}\nEquations: {:?}\nConstants: {:?}", e, equations, constants))?;
+
+        // Apply solution to pins
+        for (pid, &(vi, ratio)) in &pin_to_var {
+            if vi >= solution.len() {
+                continue;
+            }
+            let var_value = solution[vi].clone();
+            let new_rate = var_value * ratio;
+            if let Some((node_id, direction, idx)) = self.find_pin_location(*pid) {
+                let ni = self.find_node_index(node_id).unwrap();
+                if let Some(n) = self.nodes[ni].downcast_mut::<CraftNode>() {
+                    match direction {
+                        PinDirection::Input => n.base.ins[idx].current_rate = new_rate,
+                        PinDirection::Output => n.base.outs[idx].current_rate = new_rate,
+                    }
+                } else if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                    match direction {
+                        PinDirection::Input => n.base.ins[idx].current_rate = new_rate,
+                        PinDirection::Output => n.base.outs[idx].current_rate = new_rate,
+                    }
+                } else if let Some(n) = self.nodes[ni].downcast_mut::<GroupNode>() {
+                    match direction {
+                        PinDirection::Input => n.base.ins[idx].current_rate = new_rate,
+                        PinDirection::Output => n.base.outs[idx].current_rate = new_rate,
+                    }
+                } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+                    n.base.ins[idx].current_rate = new_rate;
+                }
+            }
+        }
+
+        // For locked pins, keep their rates as-is (already present)
+
+        // Update node rates from pins
+        for node_any in &mut self.nodes {
+            if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+                // Prefer outputs for craft nodes when available
+                if !n.base.outs.is_empty() {
+                    // Use first out that was part of propagation, else any
+                    let mut chosen: Option<(FractionalNumber, FractionalNumber)> = None;
+                    for p in &n.base.outs {
+                        if relevant_pins.contains(&p.id) {
+                            // Node rate = out.current / (out.base * (1 + num_somersloop * somersloop_mult))
+                            let denom = p.base_rate * (FractionalNumber::new(1, 1) + n.num_somersloop * n.somersloop_mult);
+                            if denom.numerator() != 0 {
+                                chosen = Some((p.current_rate / denom, p.current_rate));
+                                break;
+                            }
+                        }
+                    }
+                    if chosen.is_none() {
+                        for p in &n.base.outs {
+                            if p.base_rate.numerator() != 0 {
+                                chosen = Some((p.current_rate / p.base_rate, p.current_rate));
+                                break;
+                            }
+                        }
+                    }
+                    if let Some((new_node_rate, _)) = chosen {
+                        if new_node_rate != n.current_rate {
+                            n.update_rate(new_node_rate);
+                        }
+                    }
+                } else if !n.base.ins.is_empty() {
+                    // Fall back to inputs
+                    for p in &n.base.ins {
+                        if p.base_rate.numerator() != 0 {
+                            let new_node_rate = p.current_rate / p.base_rate;
+                            if new_node_rate != n.current_rate {
+                                n.update_rate(new_node_rate);
+                            }
+                            break;
+                        }
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_mut::<GroupNode>() {
+                // Determine node rate from any touched pin
+                let mut chosen: Option<FractionalNumber> = None;
+                for p in &n.base.outs {
+                    if relevant_pins.contains(&p.id) && p.base_rate.numerator() != 0 {
+                        chosen = Some(p.current_rate / p.base_rate);
+                        break;
+                    }
+                }
+                if chosen.is_none() {
+                    for p in &n.base.ins {
+                        if relevant_pins.contains(&p.id) && p.base_rate.numerator() != 0 {
+                            chosen = Some(p.current_rate / p.base_rate);
+                            break;
+                        }
+                    }
+                }
+                if let Some(new_node_rate) = chosen {
+                    if new_node_rate != n.current_rate {
+                        n.current_rate = new_node_rate;
+                        // Propagate to pins
+                        for p in &mut n.base.ins {
+                            p.current_rate = p.base_rate * n.current_rate;
+                        }
+                        for p in &mut n.base.outs {
+                            p.current_rate = p.base_rate * n.current_rate;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Get count of nodes in the graph
     pub fn node_count(&self) -> usize {
         self.nodes.len()
@@ -1651,26 +2601,35 @@ mod tests {
         // Create a craft node without relying on game data
         let node_id = app.get_next_id();
         let mut craft = CraftNode::new(node_id, "test_recipe".to_string());
-        // Create one output pin with base rate 2
-        let pin_id = app.get_next_id();
+        // Create one input pin with base rate 1 and one output pin with base rate 1
+        let in_pin = app.get_next_id();
+        craft.base.ins.push(Pin::new(
+            in_pin,
+            PinDirection::Input,
+            node_id,
+            None,
+            false,
+            FractionalNumber::new(1, 1),
+        ));
+        let out_pin = app.get_next_id();
         craft.base.outs.push(Pin::new(
-            pin_id,
+            out_pin,
             PinDirection::Output,
             node_id,
             None,
             false,
-            FractionalNumber::new(2, 1),
+            FractionalNumber::new(1, 1),
         ));
         app.nodes.push(Box::new(craft));
 
         let node_idx = app.find_node_index(node_id).expect("find node");
 
-        // Now set output pin rate to 6 -> node rate should become 3
+        // Set input pin rate to 4 -> output and node rate should become 4
         app.set_pin_rate(
             node_id,
-            PinDirection::Output,
+            PinDirection::Input,
             0,
-            FractionalNumber::new(6, 1),
+            FractionalNumber::new(4, 1),
         )
         .expect("set_pin_rate");
 
@@ -1678,7 +2637,150 @@ mod tests {
         let n = app.nodes[node_idx]
             .downcast_ref::<CraftNode>()
             .expect("expected craft node");
-        assert_eq!(n.current_rate, FractionalNumber::new(3, 1));
-        assert_eq!(n.base.outs[0].current_rate, FractionalNumber::new(6, 1));
+        assert_eq!(n.base.ins[0].current_rate, FractionalNumber::new(4, 1));
+        assert_eq!(n.base.outs[0].current_rate, FractionalNumber::new(4, 1));
+        assert_eq!(n.current_rate, FractionalNumber::new(4, 1));
+    }
+
+    #[test]
+    fn looped_graph_has_valid_solution() {
+        let mut app = ProductionApp::new();
+
+        // Node A: consumes Water (base 2) and Bauxite (base 1), produces Alumina Solution (base 4)
+        let a_id = app.get_next_id();
+        let mut a = CraftNode::new(a_id, "AluminaProducer".to_string());
+        let a_in_water = app.get_next_id();
+        a.base.ins.push(Pin::new(
+            a_in_water,
+            PinDirection::Input,
+            a_id,
+            Some("Water".to_string()),
+            false,
+            FractionalNumber::new(2, 1),
+        ));
+        let a_in_bauxite = app.get_next_id();
+        a.base.ins.push(Pin::new(
+            a_in_bauxite,
+            PinDirection::Input,
+            a_id,
+            Some("Bauxite".to_string()),
+            false,
+            FractionalNumber::new(1, 1),
+        ));
+        let a_out_alum = app.get_next_id();
+        a.base.outs.push(Pin::new(
+            a_out_alum,
+            PinDirection::Output,
+            a_id,
+            Some("Alumina Solution".to_string()),
+            false,
+            FractionalNumber::new(4, 1),
+        ));
+        app.nodes.push(Box::new(a));
+
+        // Node B: consumes Alumina Solution (base 2), produces Water (base 5/6) and Scrap
+        // (water base chosen so that B produces 5 units when consuming 12 alumina)
+        let b_id = app.get_next_id();
+        let mut b = CraftNode::new(b_id, "AluminumScrapProducer".to_string());
+        let b_in_alum = app.get_next_id();
+        b.base.ins.push(Pin::new(
+            b_in_alum,
+            PinDirection::Input,
+            b_id,
+            Some("Alumina Solution".to_string()),
+            false,
+            FractionalNumber::new(2, 1),
+        ));
+        let b_out_water = app.get_next_id();
+        b.base.outs.push(Pin::new(
+            b_out_water,
+            PinDirection::Output,
+            b_id,
+            Some("Water".to_string()),
+            false,
+            FractionalNumber::new(5, 6),
+        ));
+        let b_out_scrap = app.get_next_id();
+        b.base.outs.push(Pin::new(
+            b_out_scrap,
+            PinDirection::Output,
+            b_id,
+            Some("Aluminum Scrap".to_string()),
+            false,
+            FractionalNumber::new(1, 1),
+        ));
+        app.nodes.push(Box::new(b));
+
+        // Merger node to combine external water (1) with looped water from B
+        let m_id = app.get_next_id();
+        let mut m = OrganizerNode::new(m_id, NodeKind::Merger, None);
+        // two inputs
+        let m_in0 = app.get_next_id();
+        m.base.ins.push(Pin::new(
+            m_in0,
+            PinDirection::Input,
+            m_id,
+            Some("Water".to_string()),
+            false,
+            FractionalNumber::default(),
+        ));
+        let m_in1 = app.get_next_id();
+        m.base.ins.push(Pin::new(
+            m_in1,
+            PinDirection::Input,
+            m_id,
+            Some("Water".to_string()),
+            true, // locked external supply
+            FractionalNumber::default(),
+        ));
+        // set external locked supply to 1
+        m.base.ins[1].current_rate = FractionalNumber::new(1, 1);
+        // one output
+        let m_out = app.get_next_id();
+        m.base.outs.push(Pin::new(
+            m_out,
+            PinDirection::Output,
+            m_id,
+            Some("Water".to_string()),
+            false,
+            FractionalNumber::default(),
+        ));
+        app.nodes.push(Box::new(m));
+
+        // Connect A.out (Alumina Solution) -> B.in (Alumina Solution)
+        let (_link1, _warn1) = app.create_link(a_out_alum, b_in_alum).expect("create link");
+        // Connect B.out (Water) -> Merger.in0
+        let (_link2, _warn2) = app.create_link(b_out_water, m_in0).expect("create link");
+        // Connect Merger.out -> A.in (Water)
+        let (_link3, _warn3) = app.create_link(m_out, a_in_water).expect("create link");
+
+        // Constrain A's alumina output to 12 units
+        app.update_nodes_rate(a_out_alum, FractionalNumber::new(12, 1))
+            .expect("propagation should succeed");
+
+        // Verify resulting flows
+        // Re-borrow to check node/pin states
+        let a_idx = app.find_node_index(a_id).unwrap();
+        let b_idx = app.find_node_index(b_id).unwrap();
+        let m_idx = app.find_node_index(m_id).unwrap();
+        let a_node = app.nodes[a_idx].downcast_ref::<CraftNode>().unwrap();
+        let b_node = app.nodes[b_idx].downcast_ref::<CraftNode>().unwrap();
+        let m_node = app.nodes[m_idx].downcast_ref::<OrganizerNode>().unwrap();
+
+        // A's output should be 12
+        assert_eq!(a_node.base.outs[0].current_rate, FractionalNumber::new(12, 1));
+        // B's input should be 12
+        assert_eq!(b_node.base.ins[0].current_rate, FractionalNumber::new(12, 1));
+        // B's water output should be 5 (6 * 5/6)
+        assert_eq!(b_node.base.outs[0].current_rate, FractionalNumber::new(5, 1));
+        // Merger inputs: external locked 1 and B water 5
+        assert_eq!(m_node.base.ins[1].current_rate, FractionalNumber::new(1, 1));
+        assert_eq!(m_node.base.ins[0].current_rate, FractionalNumber::new(5, 1));
+        // Merger output should be 6 and A's water input should be 6
+        assert_eq!(m_node.base.outs[0].current_rate, FractionalNumber::new(6, 1));
+        assert_eq!(a_node.base.ins[0].current_rate, FractionalNumber::new(6, 1));
+        // Node rates
+        assert_eq!(a_node.current_rate, FractionalNumber::new(3, 1)); // 12 / 4
+        assert_eq!(b_node.current_rate, FractionalNumber::new(6, 1)); // 12 / 2
     }
 }
