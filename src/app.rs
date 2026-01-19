@@ -1798,6 +1798,7 @@ pub struct TemplateApp {
     power_equal_clocks: bool,
     save_name: String,
     file_suggestions: Vec<(String, bool)>,
+    show_save_suggestions: bool,
     build_progress_open: bool,
 
     // Icon cache for items (store TextureHandle so images stay alive)
@@ -1878,6 +1879,7 @@ impl Default for TemplateApp {
             power_equal_clocks: false,
             save_name: String::new(),
             file_suggestions: Vec::new(),
+            show_save_suggestions: false,
             show_controls_popup: false,
             controls_popup_just_opened: false,
             show_recipe_selector: false,
@@ -1919,6 +1921,9 @@ impl TemplateApp {
 
         // Ensure viewer respects current power mode
         app.snarl_viewer.power_equal_clocks = app.power_equal_clocks;
+
+        // Populate save file list
+        app.list_save_files();
 
         app
     }
@@ -2130,7 +2135,117 @@ impl TemplateApp {
 
         editor_node
     }
-}
+
+    /// Populate `file_suggestions` from the local saves directory (desktop only).
+    fn list_save_files(&mut self) {
+        self.file_suggestions.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use std::fs;
+            use std::path::Path;
+            let save_dir = Path::new("saves");
+            if save_dir.exists() && save_dir.is_dir() {
+                if let Ok(entries) = fs::read_dir(save_dir) {
+                    for e in entries.flatten() {
+                        let path = e.path();
+                        if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                            if ext.eq_ignore_ascii_case("fcs") {
+                                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                    self.file_suggestions.push((stem.to_owned(), false));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Rebuild the UI snarl from the current `production_app` state after loading.
+    fn rebuild_snarl_from_production(&mut self) {
+        // Create a fresh snarl and map production node ids -> ui node ids
+        self.snarl = egui_snarl::Snarl::new();
+        // Re-populate viewer icon map so nodes render icons immediately
+        self.snarl_viewer.set_icon_map(self.item_icon_cache.iter().map(|(k, h)| (k.clone(), h.id())).collect());
+
+        let mut node_map: std::collections::HashMap<u64, egui_snarl::NodeId> = std::collections::HashMap::new();
+
+        for node_any in &self.production_app.nodes {
+            // Craft
+            if let Some(craft) = node_any.downcast_ref::<crate::node::CraftNode>() {
+                let node_id = craft.base.id;
+                let label = self
+                    .game_data
+                    .recipes
+                    .iter()
+                    .find(|r| r.name == craft.recipe_name)
+                    .map(|r| r.display_name.clone())
+                    .unwrap_or_else(|| craft.recipe_name.clone());
+                let en = self.build_editor_node(node_id, label, NodeType::Craft);
+                let pos = egui::pos2(craft.base.position.0, craft.base.position.1);
+                let ui_node = self.snarl.insert_node(pos, en);
+                node_map.insert(node_id, ui_node);
+            }
+            // Organizer nodes (splitters / merger)
+            else if let Some(org) = node_any.downcast_ref::<crate::node::OrganizerNode>() {
+                let node_id = org.base.id;
+                let (label, node_type) = match org.base.kind {
+                    crate::node::NodeKind::Merger => ("Merger".to_owned(), NodeType::Merger),
+                    crate::node::NodeKind::CustomSplitter => ("Splitter*".to_owned(), NodeType::CustomSplitter),
+                    crate::node::NodeKind::GameSplitter => ("Splitter".to_owned(), NodeType::GameSplitter),
+                    _ => ("Organizer".to_owned(), NodeType::Group),
+                };
+                let en = self.build_editor_node(node_id, label, node_type);
+                let pos = egui::pos2(org.base.position.0, org.base.position.1);
+                let ui_node = self.snarl.insert_node(pos, en);
+                node_map.insert(node_id, ui_node);
+            }
+            // Group
+            else if let Some(group) = node_any.downcast_ref::<crate::node::GroupNode>() {
+                let node_id = group.base.id;
+                let en = self.build_editor_node(node_id, format!("Group {}", node_id), NodeType::Group);
+                let pos = egui::pos2(group.base.position.0, group.base.position.1);
+                let ui_node = self.snarl.insert_node(pos, en);
+                node_map.insert(node_id, ui_node);
+            }
+            // Sink
+            else if let Some(sink) = node_any.downcast_ref::<crate::node::SinkNode>() {
+                let node_id = sink.base.id;
+                let en = self.build_editor_node(node_id, "Sink", NodeType::Sink);
+                let pos = egui::pos2(sink.base.position.0, sink.base.position.1);
+                let ui_node = self.snarl.insert_node(pos, en);
+                node_map.insert(node_id, ui_node);
+            }
+        }
+
+        // Connect links (use production_app.find_pin_location to map pin ids -> node/pin idx)
+        for link in &self.production_app.links {
+            if let Some((start_node, start_dir, start_idx)) = self.production_app.find_pin_location(link.start_pin_id) {
+                if let Some((end_node, end_dir, end_idx)) = self.production_app.find_pin_location(link.end_pin_id) {
+                    // Determine out/input ends
+                    let (out_node, out_idx, in_node, in_idx) = if start_dir == crate::pin::PinDirection::Output && end_dir == crate::pin::PinDirection::Input {
+                        (start_node, start_idx, end_node, end_idx)
+                    } else if start_dir == crate::pin::PinDirection::Input && end_dir == crate::pin::PinDirection::Output {
+                        (end_node, end_idx, start_node, start_idx)
+                    } else {
+                        continue; // unsupported
+                    };
+
+                    if let (Some(&ui_out), Some(&ui_in)) = (node_map.get(&out_node), node_map.get(&in_node)) {
+                        let out_pin = egui_snarl::OutPinId { node: ui_out, output: out_idx };
+                        let in_pin = egui_snarl::InPinId { node: ui_in, input: in_idx };
+                        let _ = self.snarl.connect(out_pin, in_pin);
+
+                        // Keep types in sync for organizers (use UI node ids)
+                        self.snarl_viewer.sync_merger_splitter(&mut self.snarl, ui_out);
+                        self.snarl_viewer.sync_merger_splitter(&mut self.snarl, ui_in);
+                    }
+                }
+            }
+        }
+    }
+
+    }
 
 impl eframe::App for TemplateApp {
     /// Called by the framework to save state before shutdown.
@@ -2262,17 +2377,88 @@ impl TemplateApp {
                     // Save/Load section
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
-                            ui.text_edit_singleline(&mut self.save_name)
+                            let save_resp = ui.text_edit_singleline(&mut self.save_name)
                                 .on_hover_text("Name to save/load...");
+
+                            // Update suggestions and show popup when the box is focused/changed
+                            if save_resp.has_focus() || save_resp.changed() {
+                                self.list_save_files();
+                                self.show_save_suggestions = true;
+                            }
+
+                            // Show native popup below the text box with file suggestions
+                            {
+                            // Collect user interactions and apply them after the popup to avoid multiple mutable borrows
+                            let mut selected: Option<String> = None;
+                            let mut to_delete: Option<String> = None;
+
+                            egui::containers::Popup::from_response(&save_resp)
+                                .open_bool(&mut self.show_save_suggestions)
+                                .show(|popup_ui| {
+                                    use egui::ScrollArea;
+                                    let max_items = 10usize;
+                                    ScrollArea::vertical()
+                                        .max_height((max_items as f32) * 24.0)
+                                        .show(popup_ui, |ui| {
+                                            for (name, _) in &self.file_suggestions {
+                                                ui.horizontal(|ui| {
+                                                    if ui.small_button("x").clicked() {
+                                                        to_delete = Some(name.clone());
+                                                    }
+                                                    if ui.button(name).clicked() {
+                                                        selected = Some(name.clone());
+                                                    }
+                                                });
+                                            }
+                                        });
+                                });
+
+                            if let Some(s) = selected {
+                                self.save_name = s;
+                                self.show_save_suggestions = false;
+                            }
+                            if let Some(d) = to_delete {
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    let _ = std::fs::remove_file(format!("saves/{}.fcs", d));
+                                }
+                                self.list_save_files();
+                            }
+                        }
 
                         
                             if ui.button("Save").on_hover_text("Save current production chain").clicked() {
                                 if !self.save_name.is_empty() {
                                     match self.production_app.save_to_json() {
-                                        Ok(_json) => {
-                                            // TODO: Write to file
-                                            self.error_message = format!("Saved: {}", self.save_name);
-                                            self.error_time = 3.0;
+                                        Ok(json) => {
+                                            #[cfg(not(target_arch = "wasm32"))]
+                                            {
+                                                use std::fs;
+                                                use std::path::Path;
+                                                let save_dir = Path::new("saves");
+                                                if let Err(e) = fs::create_dir_all(&save_dir) {
+                                                    self.error_message = format!("Save error: {}", e);
+                                                    self.error_time = 3.0;
+                                                } else {
+                                                    let path = save_dir.join(format!("{}.fcs", self.save_name));
+                                                    match fs::write(&path, json) {
+                                                        Ok(()) => {
+                                                            self.error_message = format!("Saved: {}", self.save_name);
+                                                            self.error_time = 3.0;
+                                                            self.list_save_files();
+                                                        }
+                                                        Err(e) => {
+                                                            self.error_message = format!("Save error: {}", e);
+                                                            self.error_time = 3.0;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            #[cfg(target_arch = "wasm32")]
+                                            {
+                                                self.error_message = "Save not implemented for web".to_owned();
+                                                self.error_time = 3.0;
+                                            }
                                         }
                                         Err(e) => {
                                             self.error_message = format!("Save error: {}", e);
@@ -2282,11 +2468,49 @@ impl TemplateApp {
                                 }
                             }
 
-                            if ui.button("Load").on_hover_text("Load a production chain").clicked() {
+                            // Enable Load only when file exists (desktop); web not implemented
+                            let mut load_enabled = false;
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
                                 if !self.save_name.is_empty() {
-                                    // TODO: Read from file and load
-                                    self.error_message = format!("Load not implemented yet");
-                                    self.error_time = 2.0;
+                                    load_enabled = std::path::Path::new(&format!("saves/{}.fcs", self.save_name)).exists();
+                                }
+                            }
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                load_enabled = false;
+                            }
+
+                            let load_resp = ui.add_enabled(load_enabled, egui::Button::new("Load")).on_hover_text("Load a production chain");
+                            if load_resp.clicked() {
+                                if !self.save_name.is_empty() {
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    {
+                                        let path = format!("saves/{}.fcs", self.save_name);
+                                        match std::fs::read_to_string(&path) {
+                                            Ok(content) => match self.production_app.load_from_json(&content, Some(&self.game_data)) {
+                                                Ok(()) => {
+                                                    // Rebuild UI from production model
+                                                    self.rebuild_snarl_from_production();
+                                                    self.error_message = format!("Loaded: {}", self.save_name);
+                                                    self.error_time = 2.0;
+                                                }
+                                                Err(e) => {
+                                                    self.error_message = format!("Load error: {}", e);
+                                                    self.error_time = 3.0;
+                                                }
+                                            },
+                                            Err(e) => {
+                                                self.error_message = format!("Load error: {}", e);
+                                                self.error_time = 3.0;
+                                            }
+                                        }
+                                    }
+                                    #[cfg(target_arch = "wasm32")]
+                                    {
+                                        self.error_message = "Load not implemented for web".to_owned();
+                                        self.error_time = 2.0;
+                                    }
                                 }
                             }
                         });
