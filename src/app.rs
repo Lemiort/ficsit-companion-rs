@@ -2184,6 +2184,23 @@ impl TemplateApp {
         app
     }
 
+    // Emit a log and optionally surface the message in the UI (duration in seconds).
+    fn emit_message(&mut self, msg: impl Into<String>, level: log::Level) {
+        let s = msg.into();
+        match level {
+            log::Level::Error => log::error!("{}", s),
+            log::Level::Warn => log::warn!("{}", s),
+            log::Level::Info => log::info!("{}", s),
+            log::Level::Debug => log::debug!("{}", s),
+            log::Level::Trace => log::trace!("{}", s),
+        }
+        let show_in_ui = false;
+        if show_in_ui {
+            self.error_message = s;
+            self.error_time = 3.0;
+        }
+    }
+
     /// Load item icon textures into `item_icon_cache` using `cc.egui_ctx`.
     fn load_item_textures(&mut self, cc: &eframe::CreationContext<'_>) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -2602,15 +2619,13 @@ impl TemplateApp {
                             if ui.button("Export").on_hover_text("Export current production chain to disk").clicked() {
                                  // !TODO: Implement export functionality
                                  //const std::string path = "production_chain.fcs";
-                                self.error_message = "Export not implemented yet".to_owned();
-                                self.error_time = 3.0;
+                                self.emit_message("Export not implemented yet", log::Level::Warn);
                             }
                             if ui.button("Import").on_hover_text("Import a production chain from disk").clicked() {
                                 // !TODO: Implement import functionality
                                 //waitForFileInput();
                                 //if (std::filesystem::exists("_internal_load_file"))
-                                self.error_message = "Import not implemented yet".to_owned();
-                                self.error_time = 3.0;
+                                self.emit_message("Import not implemented yet", log::Level::Warn);
                             }
                         }
 
@@ -2694,32 +2709,27 @@ impl TemplateApp {
                                                 use std::path::Path;
                                                 let save_dir = Path::new("saves");
                                                 if let Err(e) = fs::create_dir_all(&save_dir) {
-                                                    self.error_message = format!("Save error: {}", e);
-                                                    self.error_time = 3.0;
+                                                    self.emit_message(format!("Save error: {}", e), log::Level::Error);
                                                 } else {
                                                     let path = save_dir.join(format!("{}.fcs", self.save_name));
                                                     match fs::write(&path, json) {
                                                         Ok(()) => {
-                                                            self.error_message = format!("Saved: {}", self.save_name);
-                                                            self.error_time = 3.0;
+                                                            self.emit_message(format!("Saved: {}", self.save_name), log::Level::Info);
                                                             self.list_save_files();
                                                         }
                                                         Err(e) => {
-                                                            self.error_message = format!("Save error: {}", e);
-                                                            self.error_time = 3.0;
+                                                            self.emit_message(format!("Save error: {}", e), log::Level::Error);
                                                         }
                                                     }
                                                 }
                                             }
                                             #[cfg(target_arch = "wasm32")]
                                             {
-                                                self.error_message = "Save not implemented for web".to_owned();
-                                                self.error_time = 3.0;
+                                                self.emit_message("Save not implemented for web", log::Level::Warn);
                                             }
                                         }
                                         Err(e) => {
-                                            self.error_message = format!("Save error: {}", e);
-                                            self.error_time = 3.0;
+                                            self.emit_message(format!("Save error: {}", e), log::Level::Error);
                                         }
                                     }
                                 }
@@ -2749,24 +2759,20 @@ impl TemplateApp {
                                                 Ok(()) => {
                                                     // Rebuild UI from production model
                                                     self.rebuild_snarl_from_production();
-                                                    self.error_message = format!("Loaded: {}", self.save_name);
-                                                    self.error_time = 2.0;
+                                                    self.emit_message(format!("Loaded: {}", self.save_name), log::Level::Info);
                                                 }
                                                 Err(e) => {
-                                                    self.error_message = format!("Load error: {}", e);
-                                                    self.error_time = 3.0;
+                                                    self.emit_message(format!("Load error: {}", e), log::Level::Error);
                                                 }
                                             },
                                             Err(e) => {
-                                                self.error_message = format!("Load error: {}", e);
-                                                self.error_time = 3.0;
+                                                self.emit_message(format!("Load error: {}", e), log::Level::Error);
                                             }
                                         }
                                     }
                                     #[cfg(target_arch = "wasm32")]
                                     {
-                                        self.error_message = "Load not implemented for web".to_owned();
-                                        self.error_time = 2.0;
+                                        self.emit_message("Load not implemented for web", log::Level::Warn);
                                     }
                                 }
                             }
@@ -3068,32 +3074,28 @@ impl TemplateApp {
                         let new_ui_node = self.snarl.insert_node(pending.pos, en);
                         // Connect dropped wire to first input if present
                         connect_pending_wire_to_node(self, &pending, new_ui_node);
-                        self.error_message = "Created Merger".to_string();
-                        self.error_time = 2.0;
+                        self.emit_message("Created Merger", log::Level::Info);
                     }
                     DroppedWireChoice::CustomSplitter => {
                         let node_id = self.production_app.add_custom_splitter_node();
                         let en = self.build_editor_node(node_id, "Splitter*", NodeType::CustomSplitter);
                         let new_ui_node = self.snarl.insert_node(pending.pos, en);
                         connect_pending_wire_to_node(self, &pending, new_ui_node);
-                        self.error_message = "Created Custom Splitter".to_string();
-                        self.error_time = 2.0;
+                        self.emit_message("Created Custom Splitter", log::Level::Info);
                     }
                     DroppedWireChoice::GameSplitter => {
                         let node_id = self.production_app.add_game_splitter_node();
                         let en = self.build_editor_node(node_id, "Splitter", NodeType::GameSplitter);
                         let new_ui_node = self.snarl.insert_node(pending.pos, en);
                         connect_pending_wire_to_node(self, &pending, new_ui_node);
-                        self.error_message = "Created Game Splitter".to_string();
-                        self.error_time = 2.0;
+                        self.emit_message("Created Game Splitter", log::Level::Info);
                     }
                     DroppedWireChoice::Sink => {
                         let node_id = self.production_app.add_sink_node();
                         let en = self.build_editor_node(node_id, "Sink", NodeType::Sink);
                         let new_ui_node = self.snarl.insert_node(pending.pos, en);
                         connect_pending_wire_to_node(self, &pending, new_ui_node);
-                        self.error_message = "Created Sink".to_string();
-                        self.error_time = 2.0;
+                        self.emit_message("Created Sink", log::Level::Info);
                     }
                     DroppedWireChoice::Craft(ref opt_name) => {
                         if let Some(recipe_name) = opt_name {
@@ -3110,12 +3112,10 @@ impl TemplateApp {
                                     let en = self.build_editor_node(node_id, display, NodeType::Craft);
                                     let new_ui_node = self.snarl.insert_node(pending.pos, en);
                                     connect_pending_wire_to_node(self, &pending, new_ui_node);
-                                    self.error_message = format!("Created: {}", recipe_name);
-                                    self.error_time = 2.0;
+                                    self.emit_message(format!("Created: {}", recipe_name), log::Level::Info);
                                 }
                                 Err(e) => {
-                                    self.error_message = format!("Error: {}", e);
-                                    self.error_time = 3.0;
+                                    self.emit_message(format!("Error: {}", e), log::Level::Error);
                                 }
                             }
                         } else {
@@ -3127,8 +3127,7 @@ impl TemplateApp {
             }
             // If the viewer rejected a connection, surface it as an error message for a short time
             if let Some(msg) = self.snarl_viewer.rejected_connection_reason.take() {
-                self.error_message = msg;
-                self.error_time = 3.0;
+                self.emit_message(msg, log::Level::Error);
             }
 
             // Collect nodes that need a UI refresh after mutations
@@ -3143,8 +3142,7 @@ impl TemplateApp {
                             match self.production_app.set_pin_rate(node_id, dir, idx, f) {
                                 Ok(()) => {
                                     // Success feedback and refresh affected nodes (the node itself and direct neighbors)
-                                    self.error_message = "Updated pin rate".to_string();
-                                    self.error_time = 1.0;
+                                    self.emit_message("Updated pin rate", log::Level::Info);
                                     nodes_to_refresh.push(node_id);
                                     // Mark pin success (inline UI indicator)
                                     self.snarl_viewer.mark_pin_success(node_id, dir, idx);
@@ -3227,18 +3225,15 @@ impl TemplateApp {
                                     }
                                 }
                                 Err(e) => {
-                                    self.error_message = format!("Error: {}", e);
-                                    self.error_time = 3.0;
+                                    self.emit_message(format!("Error: {}", e), log::Level::Error);
                                 }
                             }
                         } else {
-                            self.error_message = "Invalid rate (negative)".to_string();
-                            self.error_time = 2.0;
+                            self.emit_message("Invalid rate (negative)", log::Level::Warn);
                         }
                     }
                     Err(_) => {
-                        self.error_message = "Invalid rate format".to_string();
-                        self.error_time = 2.0;
+                        self.emit_message("Invalid rate format", log::Level::Warn);
                     }
                 }
             }
@@ -3260,8 +3255,7 @@ impl TemplateApp {
 
                         if let Some(lid) = maybe_link {
                             if let Err(e) = self.production_app.delete_link(lid) {
-                                self.error_message = format!("Failed to delete link: {}", e);
-                                self.error_time = 3.0;
+                                self.emit_message(format!("Failed to delete link: {}", e), log::Level::Error);
                             } else {
                                 // refresh both endpoint nodes
                                 nodes_to_refresh.push(out_prod);
@@ -3283,8 +3277,7 @@ impl TemplateApp {
                     ) {
                         match self.production_app.create_link(start_pid, end_pid) {
                             Ok((_link_id, Some(warn))) => {
-                                self.error_message = warn;
-                                self.error_time = 4.0;
+                                self.emit_message(warn, log::Level::Warn);
                                 // still refresh both endpoints to keep UI consistent
                                 nodes_to_refresh.push(out_prod);
                                 nodes_to_refresh.push(in_prod);
@@ -3316,8 +3309,7 @@ impl TemplateApp {
                                                 for a in affected_vec { all_affected.insert(a); }
                                             }
                                             Err(e) => {
-                                                self.error_message = format!("Error applying lock propagation: {}", e);
-                                                self.error_time = 3.0;
+                                                self.emit_message(format!("Error applying lock propagation: {}", e), log::Level::Error);
                                                 continue;
                                             }
                                         }
@@ -3378,8 +3370,7 @@ impl TemplateApp {
                                                 for a in affected_vec { all_affected.insert(a); }
                                             }
                                             Err(e) => {
-                                                self.error_message = format!("Error applying lock propagation: {}", e);
-                                                self.error_time = 3.0;
+                                                self.emit_message(format!("Error applying lock propagation: {}", e), log::Level::Error);
                                                 continue;
                                             }
                                         }
@@ -3409,8 +3400,7 @@ impl TemplateApp {
                                 }
                             }
                             Err(e) => {
-                                self.error_message = format!("Error creating link: {}", e);
-                                self.error_time = 4.0;
+                                self.emit_message(format!("Error creating link: {}", e), log::Level::Error);
                             }
                         }
                     }
@@ -3429,14 +3419,12 @@ impl TemplateApp {
                                 nodes_to_refresh.push(node_id);
                             }
                             Err(e) => {
-                                self.error_message = format!("Error: {}", e);
-                                self.error_time = 3.0;
+                                self.emit_message(format!("Error: {}", e), log::Level::Error);
                             }
                         }
                     }
                     Err(_) => {
-                        self.error_message = "Invalid somersloop format".to_string();
-                        self.error_time = 2.0;
+                        self.emit_message("Invalid somersloop format", log::Level::Warn);
                     }
                 }
             }
@@ -3449,8 +3437,7 @@ impl TemplateApp {
                             log::info!("[UI] processing pending building edit: node={} parsed={}", node_id, f.to_fraction_string());
                             match self.production_app.set_node_building_count(node_id, f) {
                                 Ok(()) => {
-                                    self.error_message = "Updated building count".to_string();
-                                    self.error_time = 1.0;
+                                    self.emit_message("Updated building count", log::Level::Info);
                                     nodes_to_refresh.push(node_id);
 
                                     // Immediately update the snarl node display for this node so the user sees the change
@@ -3503,18 +3490,15 @@ impl TemplateApp {
                                     }
                                 }
                                 Err(e) => {
-                                    self.error_message = format!("Error: {}", e);
-                                    self.error_time = 3.0;
+                                    self.emit_message(format!("Error: {}", e), log::Level::Error);
                                 }
                             }
                         } else {
-                            self.error_message = "Invalid rate (negative)".to_string();
-                            self.error_time = 2.0;
+                            self.emit_message("Invalid rate (negative)", log::Level::Warn);
                         }
                     }
                     Err(_) => {
-                        self.error_message = "Invalid rate format".to_string();
-                        self.error_time = 2.0;
+                        self.emit_message("Invalid rate format", log::Level::Warn);
                     }
                 }
             }
@@ -3538,16 +3522,14 @@ impl TemplateApp {
                                     deleted += 1;
                                 }
                                 Err(e) => {
-                                    self.error_message = format!("Error: {}", e);
-                                    self.error_time = 3.0;
+                                    self.emit_message(format!("Error: {}", e), log::Level::Error);
                                     break;
                                 }
                             }
                         }
                     }
                     if deleted > 0 {
-                        self.error_message = format!("Deleted {} node(s)", deleted);
-                        self.error_time = 2.0;
+                        self.emit_message(format!("Deleted {} node(s)", deleted), log::Level::Info);
                     }
                 }
             }
@@ -3574,8 +3556,7 @@ impl TemplateApp {
                         }
                     }
                     Err(e) => {
-                        self.error_message = format!("Error: {}", e);
-                        self.error_time = 3.0;
+                        self.emit_message(format!("Error: {}", e), log::Level::Error);
                     }
                 }
             }
@@ -3589,8 +3570,7 @@ impl TemplateApp {
                     PinDirection::Output => self.production_app.add_output_pin_to_node(node_id),
                 };
                 if let Err(e) = res {
-                    self.error_message = format!("Error: {}", e);
-                    self.error_time = 3.0;
+                    self.emit_message(format!("Error: {}", e), log::Level::Error);
                 } else {
                     nodes_to_refresh.push(node_id);
                 }
@@ -3603,8 +3583,7 @@ impl TemplateApp {
                     PinDirection::Output => self.production_app.remove_output_pin_from_node(node_id, idx),
                 };
                 if let Err(e) = res {
-                    self.error_message = format!("Error: {}", e);
-                    self.error_time = 3.0;
+                    self.emit_message(format!("Error: {}", e), log::Level::Error);
                 } else {
                     nodes_to_refresh.push(node_id);
                 }
@@ -3646,8 +3625,7 @@ impl TemplateApp {
                         }
                     }
                     Err(e) => {
-                        self.error_message = format!("Error: {}", e);
-                        self.error_time = 3.0;
+                        self.emit_message(format!("Error: {}", e), log::Level::Error);
                     }
                 }
             }
@@ -3669,8 +3647,7 @@ impl TemplateApp {
                         nodes_to_refresh.push(node_id);
                     }
                     Err(e) => {
-                        self.error_message = format!("Error: {}", e);
-                        self.error_time = 3.0;
+                        self.emit_message(format!("Error: {}", e), log::Level::Error);
                     }
                 }
             }
