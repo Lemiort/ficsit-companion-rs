@@ -217,6 +217,12 @@ struct SnarlViewer {
     // UI-only locked nodes set (visual lock toggled by right-click on node header)
     ui_locked_nodes: std::collections::HashSet<u64>,
 
+    // Pending node lock changes requested by the viewer (node_id, locked)
+    pending_node_lock_changes: Vec<(u64, bool)>,
+
+    // Pending node item type changes requested by the viewer (node_id, Option<item_name>)
+    pending_node_item_changes: Vec<(u64, Option<String>)>,
+
     // Recent pin edit successes (node_id, direction, pin_idx) -> Instant
     pub pin_success: std::collections::HashMap<(u64, PinDirection, usize), std::time::Instant>,
 
@@ -306,6 +312,14 @@ impl SnarlViewer {
 
     fn drain_pending_dropped_wire(&mut self) -> Option<PendingDroppedWire> {
         self.pending_dropped_wire.take()
+    }
+
+    fn drain_pending_node_lock_changes(&mut self) -> Vec<(u64, bool)> {
+        std::mem::take(&mut self.pending_node_lock_changes)
+    }
+
+    fn drain_pending_node_item_changes(&mut self) -> Vec<(u64, Option<String>)> {
+        std::mem::take(&mut self.pending_node_item_changes)
     }
 
     // Render a fractional number input similar to C++ RenderInputText.
@@ -717,6 +731,10 @@ impl SnarlViewer {
                                 "SnarlViewer: propagated '{}' to outputs and set footer icon {:?}",
                                 name, node_mut.item_type_icon
                             );
+
+                            // Notify TemplateApp to update production model (set organizer node's item_name and pins)
+                            self.pending_node_item_changes.push((node_mut.id, Some(name.clone())));
+                            log::debug!("[UI] queued pending_node_item_change: node={} item={}", node_mut.id, name);
                         } else {
                             node_mut.item_type = None;
                             for slot in node_mut.input_names.iter_mut() {
@@ -729,6 +747,10 @@ impl SnarlViewer {
                                 *icon_slot = None;
                             }
                             node_mut.item_type_icon = None;
+
+                            // Notify TemplateApp to clear production model organizer item
+                            self.pending_node_item_changes.push((node_mut.id, None));
+                            log::debug!("[UI] queued pending_node_item_change: node={} item=None", node_mut.id);
 
                             // Debug
                             println!(
@@ -1774,9 +1796,13 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             if was_locked {
                 self.ui_locked_nodes.remove(&nid);
                 log::info!("[UI] node {} unlocked (visual) via RMB menu", nid);
+                // Request core unlock for connected component
+                self.pending_node_lock_changes.push((nid, false));
             } else {
                 self.ui_locked_nodes.insert(nid);
                 log::info!("[UI] node {} locked (visual) via RMB menu", nid);
+                // Request core lock for connected component
+                self.pending_node_lock_changes.push((nid, true));
             }
         }
         // Close menu so nothing else is shown
@@ -1809,13 +1835,19 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
     ) {
         // Determine item type from source pins (if possible) so we can pre-filter recipes
         let mut detected_item: Option<String> = None;
+        // If the detected item came from a node's configured item type (organizer), prefer filtering by outputs
+        let mut detected_from_node_item: bool = false;
         let (outs, ins) = match src_pins {
             egui_snarl::ui::AnyPins::Out(outs) => {
-                // If single out pin and it has a named output, use it
-                if outs.len() == 1 {
-                    if let Some(node) = _snarl.get_node(outs[0].node) {
-                        if let Some(Some(name)) = node.output_names.get(outs[0].output) {
+                // If there is at least one out pin, try to detect an item from that pin or the node's item_type
+                if !outs.is_empty() {
+                    let out = outs[0];
+                    if let Some(node) = _snarl.get_node(out.node) {
+                        if let Some(Some(name)) = node.output_names.get(out.output) {
                             detected_item = Some(name.clone());
+                        } else if let Some(name) = node.item_type.as_ref() {
+                            detected_item = Some(name.clone());
+                            detected_from_node_item = true;
                         }
                     }
                 }
@@ -1834,8 +1866,11 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             }
         };
 
-        // If the user started the wire from an input pin, filter by outputs on candidate recipes
-        let filter_by_output = ins.is_some();
+        // Decide whether to filter candidate recipes by outputs or inputs.
+        // By default, starting from an input pin means we filter by outputs (producer)
+        // But if the detected item came from a node's configured item_type (organizer output),
+        // treat it as a request to find recipes that *produce* that item (filter by outputs).
+        let filter_by_output = ins.is_some() || detected_from_node_item;
         if let Some(choice) =
             self.draw_add_node_menu_contents(pos, ui, detected_item.as_deref(), filter_by_output)
         {
@@ -2864,6 +2899,9 @@ impl TemplateApp {
                             if *r != dest {
                                 affected_nodes.insert(r.node);
                                 let _ = app.snarl.disconnect(*out, *r);
+                                // Ensure production link removal gets scheduled
+                                app.snarl_viewer.pending_disconnects.push((*out, *r));
+                                log::debug!("[UI] queued pending_disconnect: out={:?} in={:?}", out, r);
                             }
                         }
 
@@ -2873,11 +2911,17 @@ impl TemplateApp {
                             if *r != *out {
                                 affected_nodes.insert(r.node);
                                 let _ = app.snarl.disconnect(*r, dest);
+                                // Ensure production link removal gets scheduled
+                                app.snarl_viewer.pending_disconnects.push((*r, dest));
+                                log::debug!("[UI] queued pending_disconnect: out={:?} in={:?}", r, dest);
                             }
                         }
 
-                        // Finally connect
+                        // Finally connect (visual)
                         let _ = app.snarl.connect(*out, dest);
+                        // And schedule production link creation so core model is updated
+                        app.snarl_viewer.pending_connections.push((*out, dest));
+                        log::debug!("[UI] queued pending_connection: out={:?} in={:?}", out, dest);
 
                         // Sync affected nodes and endpoints
                         affected_nodes.insert(out.node);
@@ -3211,11 +3255,125 @@ impl TemplateApp {
                                 // still refresh both endpoints to keep UI consistent
                                 nodes_to_refresh.push(out_prod);
                                 nodes_to_refresh.push(in_prod);
+
+                                // Apply same lock propagation behavior as on successful connect
+                                let mut lock_sources: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                                if self.snarl_viewer.ui_locked_nodes.contains(&out_prod) {
+                                    lock_sources.insert(out_prod);
+                                }
+                                if self.snarl_viewer.ui_locked_nodes.contains(&in_prod) {
+                                    lock_sources.insert(in_prod);
+                                }
+                                if let Some((ins_locked, outs_locked)) = self.production_app.get_node_pin_locked_flags(out_prod) {
+                                    if ins_locked.iter().any(|b| *b) || outs_locked.iter().any(|b| *b) {
+                                        lock_sources.insert(out_prod);
+                                    }
+                                }
+                                if let Some((ins_locked, outs_locked)) = self.production_app.get_node_pin_locked_flags(in_prod) {
+                                    if ins_locked.iter().any(|b| *b) || outs_locked.iter().any(|b| *b) {
+                                        lock_sources.insert(in_prod);
+                                    }
+                                }
+
+                                if !lock_sources.is_empty() {
+                                    let mut all_affected: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                                    for src in lock_sources {
+                                        match self.production_app.set_node_locked_and_get_affected(src, true) {
+                                            Ok(affected_vec) => {
+                                                for a in affected_vec { all_affected.insert(a); }
+                                            }
+                                            Err(e) => {
+                                                self.error_message = format!("Error applying lock propagation: {}", e);
+                                                self.error_time = 3.0;
+                                                continue;
+                                            }
+                                        }
+                                    }
+
+                                    if all_affected.is_empty() {
+                                        all_affected.insert(out_prod);
+                                        all_affected.insert(in_prod);
+                                    }
+
+                                    for nid in &all_affected {
+                                        self.snarl_viewer.ui_locked_nodes.insert(*nid);
+                                    }
+                                    for nid in &all_affected {
+                                        if let Some((ins_locked, outs_locked)) = self.production_app.get_node_pin_locked_flags(*nid) {
+                                            for node_info in self.snarl.nodes_info_mut() {
+                                                if node_info.value.id == *nid {
+                                                    node_info.value.input_locked = ins_locked.clone();
+                                                    node_info.value.output_locked = outs_locked.clone();
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        nodes_to_refresh.push(*nid);
+                                    }
+                                }
                             }
                             Ok((_link_id, None)) => {
                                 // success; refresh both endpoint nodes
                                 nodes_to_refresh.push(out_prod);
                                 nodes_to_refresh.push(in_prod);
+
+                                // If either endpoint is visually locked or has locked pins in production, propagate
+                                let mut lock_sources: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                                if self.snarl_viewer.ui_locked_nodes.contains(&out_prod) {
+                                    lock_sources.insert(out_prod);
+                                }
+                                if self.snarl_viewer.ui_locked_nodes.contains(&in_prod) {
+                                    lock_sources.insert(in_prod);
+                                }
+                                // Check production locked flags on endpoints
+                                if let Some((ins_locked, outs_locked)) = self.production_app.get_node_pin_locked_flags(out_prod) {
+                                    if ins_locked.iter().any(|b| *b) || outs_locked.iter().any(|b| *b) {
+                                        lock_sources.insert(out_prod);
+                                    }
+                                }
+                                if let Some((ins_locked, outs_locked)) = self.production_app.get_node_pin_locked_flags(in_prod) {
+                                    if ins_locked.iter().any(|b| *b) || outs_locked.iter().any(|b| *b) {
+                                        lock_sources.insert(in_prod);
+                                    }
+                                }
+
+                                if !lock_sources.is_empty() {
+                                    let mut all_affected: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                                    for src in lock_sources {
+                                        match self.production_app.set_node_locked_and_get_affected(src, true) {
+                                            Ok(affected_vec) => {
+                                                for a in affected_vec { all_affected.insert(a); }
+                                            }
+                                            Err(e) => {
+                                                self.error_message = format!("Error applying lock propagation: {}", e);
+                                                self.error_time = 3.0;
+                                                continue;
+                                            }
+                                        }
+                                    }
+
+                                    if all_affected.is_empty() {
+                                        all_affected.insert(out_prod);
+                                        all_affected.insert(in_prod);
+                                    }
+
+                                    // Update UI visual locks and per-node locked flags
+                                    for nid in &all_affected {
+                                        self.snarl_viewer.ui_locked_nodes.insert(*nid);
+                                    }
+                                    for nid in &all_affected {
+                                        if let Some((ins_locked, outs_locked)) = self.production_app.get_node_pin_locked_flags(*nid) {
+                                            for node_info in self.snarl.nodes_info_mut() {
+                                                if node_info.value.id == *nid {
+                                                    node_info.value.input_locked = ins_locked.clone();
+                                                    node_info.value.output_locked = outs_locked.clone();
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        nodes_to_refresh.push(*nid);
+                                    }
+                                }
                             }
                             Err(e) => {
                                 self.error_message = format!("Error creating link: {}", e);
@@ -3416,6 +3574,71 @@ impl TemplateApp {
                     self.error_time = 3.0;
                 } else {
                     nodes_to_refresh.push(node_id);
+                }
+            }
+
+            // Process pending node lock changes requested by UI (RMB toggles)
+            for (node_id, locked) in self.snarl_viewer.drain_pending_node_lock_changes() {
+                // Delegate locking to core and get affected nodes back for UI sync
+                match self.production_app.set_node_locked_and_get_affected(node_id, locked) {
+                    Ok(affected_nodes_vec) => {
+                        let affected_nodes: std::collections::HashSet<u64> = affected_nodes_vec.into_iter().collect();
+
+                        // Debug
+                        log::debug!("[UI] set_node_locked_and_get_affected: node={} locked={} affected_nodes={:?}", node_id, locked, affected_nodes);
+
+                        // Update UI visual lock set for affected nodes
+                        if locked {
+                            for nid in &affected_nodes {
+                                self.snarl_viewer.ui_locked_nodes.insert(*nid);
+                            }
+                        } else {
+                            for nid in &affected_nodes {
+                                self.snarl_viewer.ui_locked_nodes.remove(nid);
+                            }
+                        }
+
+                        // Update per-node locked flags for affected nodes and schedule refresh
+                        for nid in &affected_nodes {
+                            if let Some((ins_locked, outs_locked)) = self.production_app.get_node_pin_locked_flags(*nid) {
+                                for node_info in self.snarl.nodes_info_mut() {
+                                    if node_info.value.id == *nid {
+                                        node_info.value.input_locked = ins_locked.clone();
+                                        node_info.value.output_locked = outs_locked.clone();
+                                        break;
+                                    }
+                                }
+                            }
+                            nodes_to_refresh.push(*nid);
+                        }
+                    }
+                    Err(e) => {
+                        self.error_message = format!("Error: {}", e);
+                        self.error_time = 3.0;
+                    }
+                }
+            }
+
+            // Process pending node item type changes requested by viewer (e.g., merger/splitter selection)
+            for (node_id, item_opt) in self.snarl_viewer.drain_pending_node_item_changes() {
+                match self.production_app.set_node_item_name(node_id, item_opt.clone()) {
+                    Ok(()) => {
+                        log::debug!("[UI] applied set_node_item_name: node={} item={:?}", node_id, item_opt);
+                        // Update the viewer's cached node value (preserve existing item_type_icon if present)
+                        for node_info in self.snarl.nodes_info_mut() {
+                            if node_info.value.id == node_id {
+                                node_info.value.item_type = item_opt.clone();
+                                node_info.value.item_type_icon = item_opt.as_ref().and_then(|n| self.item_icon_cache.get(n).map(|h| h.id()));
+                                break;
+                            }
+                        }
+                        // Schedule refresh so the node UI updates from production
+                        nodes_to_refresh.push(node_id);
+                    }
+                    Err(e) => {
+                        self.error_message = format!("Error: {}", e);
+                        self.error_time = 3.0;
+                    }
                 }
             }
 

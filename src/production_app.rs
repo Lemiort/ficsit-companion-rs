@@ -323,6 +323,20 @@ impl ProductionApp {
         Err("Unsupported node kind for somersloop edit".into())
     }
 
+    /// Set organizer node item name and propagate to its pins
+    pub fn set_node_item_name(&mut self, node_id: u64, item: Option<String>) -> Result<(), String> {
+        let idx = self.find_node_index(node_id).ok_or_else(|| format!("Node {} not found", node_id))?;
+        let node_any = &mut self.nodes[idx];
+        if let Some(n) = node_any.downcast_mut::<OrganizerNode>() {
+            n.item_name = item.clone();
+            for p in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                p.item_name = item.clone();
+            }
+            return Ok(());
+        }
+        Err("Node is not an organizer".into())
+    }
+
     /// Set the current number of buildings for a craft node (node rate). This triggers propagation to connected graph.
     pub fn set_node_building_count(
         &mut self,
@@ -1384,228 +1398,217 @@ impl ProductionApp {
         }
     }
 
-    /// Set pin locked state with propagation logic from C++
+    /// Set pin locked state by locking/unlocking the entire connected component.
+    /// This ensures the set of locked pins equals the set returned by `get_connected_pins`.
     pub fn set_pin_locked(&mut self, pin_id: u64, locked: bool) -> Result<(), String> {
-        let (node_id, _direction, pin_idx) =
-            self.find_pin_location(pin_id).ok_or("Pin not found")?;
-        let node_idx = self.find_node_index(node_id).unwrap();
+        // Validate pin exists
+        self.find_pin_location(pin_id).ok_or("Pin not found")?;
 
-        // Get current locked state, direction, and node kind
-        let (current_locked, direction, node_kind) =
-            if let Some(n) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
-                let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
-                (pin.locked, pin.direction, n.base.kind)
-            } else if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
-                let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
-                (pin.locked, pin.direction, n.base.kind)
-            } else if let Some(n) = self.nodes[node_idx].downcast_ref::<GroupNode>() {
-                let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
-                (pin.locked, pin.direction, n.base.kind)
-            } else if let Some(n) = self.nodes[node_idx].downcast_ref::<SinkNode>() {
-                let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
-                (pin.locked, pin.direction, n.base.kind)
-            } else {
-                return Err("Invalid node type".to_string());
-            };
+        // Compute the connected component for this pin
+        let connected = self.get_connected_pins(pin_id);
+        let connected_set: std::collections::HashSet<u64> = connected.into_iter().collect();
 
-        // No change needed
-        if current_locked == locked {
-            return Ok(());
-        }
-
-        // Set the pin locked state
-        if let Some(n) = self.nodes[node_idx].downcast_mut::<CraftNode>() {
-            n.base.get_pin_by_flat_index_mut(pin_idx).unwrap().locked = locked;
-        } else if let Some(n) = self.nodes[node_idx].downcast_mut::<OrganizerNode>() {
-            n.base.get_pin_by_flat_index_mut(pin_idx).unwrap().locked = locked;
-        } else if let Some(n) = self.nodes[node_idx].downcast_mut::<GroupNode>() {
-            n.base.get_pin_by_flat_index_mut(pin_idx).unwrap().locked = locked;
-        } else if let Some(n) = self.nodes[node_idx].downcast_mut::<SinkNode>() {
-            n.base.get_pin_by_flat_index_mut(pin_idx).unwrap().locked = locked;
-        }
-
-        // Propagate lock to linked pin
-        if let Some(link) = self.find_link_by_pin(pin_id).cloned() {
-            let linked_pin_id = if link.start_pin_id == pin_id {
-                link.end_pin_id
-            } else {
-                link.start_pin_id
-            };
-
-            // Get linked pin's locked state
-            if let Some((linked_node_id, _linked_direction, linked_pin_idx)) =
-                self.find_pin_location(linked_pin_id)
-            {
-                let linked_node_idx = self.find_node_index(linked_node_id).unwrap();
-                let linked_locked = if let Some(n) =
-                    self.nodes[linked_node_idx].downcast_ref::<CraftNode>()
-                {
-                    n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
-                } else if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<OrganizerNode>()
-                {
-                    n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
-                } else if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<GroupNode>() {
-                    n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
-                } else if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<SinkNode>() {
-                    n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
-                } else {
-                    false
-                };
-
-                if linked_locked != locked {
-                    self.set_pin_locked(linked_pin_id, locked)?;
-                }
-            }
-        }
-
-        // Apply node-specific locking rules
-        use crate::node::NodeKind;
-        use crate::pin::PinDirection;
-
-        match node_kind {
-            NodeKind::Craft | NodeKind::Group | NodeKind::GameSplitter => {
-                // Lock all pins in the node
-                let all_pin_ids: Vec<u64> =
-                    if let Some(n) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
-                        n.base.all_pins().map(|p| p.id).collect()
-                    } else if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
-                        n.base.all_pins().map(|p| p.id).collect()
-                    } else if let Some(n) = self.nodes[node_idx].downcast_ref::<GroupNode>() {
-                        n.base.all_pins().map(|p| p.id).collect()
-                    } else {
-                        Vec::new()
-                    };
-
-                for pid in all_pin_ids {
-                    if pid != pin_id {
-                        let (pid_node_id, _pid_direction, pi) =
-                            self.find_pin_location(pid).unwrap();
-                        let pid_node_idx = self.find_node_index(pid_node_id).unwrap();
-                        let p_locked = if let Some(n) =
-                            self.nodes[pid_node_idx].downcast_ref::<CraftNode>()
-                        {
-                            n.base.get_pin_by_flat_index(pi).unwrap().locked
-                        } else if let Some(n) =
-                            self.nodes[pid_node_idx].downcast_ref::<OrganizerNode>()
-                        {
-                            n.base.get_pin_by_flat_index(pi).unwrap().locked
-                        } else if let Some(n) = self.nodes[pid_node_idx].downcast_ref::<GroupNode>()
-                        {
-                            n.base.get_pin_by_flat_index(pi).unwrap().locked
-                        } else {
-                            false
-                        };
-
-                        if p_locked != locked {
-                            self.set_pin_locked(pid, locked)?;
-                        }
+        // Apply the lock state to every pin in the connected set
+        for node_any in &mut self.nodes {
+            if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+                for p in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if connected_set.contains(&p.id) {
+                        p.locked = locked;
                     }
                 }
-            }
-            NodeKind::Merger | NodeKind::CustomSplitter => {
-                // Complex multi-pin logic
-                let is_custom_splitter = node_kind == NodeKind::CustomSplitter;
-
-                // Get multi-pin side (outs for CustomSplitter, ins for Merger)
-                let (multi_pin_ids, single_pin_id) =
-                    if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
-                        let multi: Vec<u64> = if is_custom_splitter {
-                            n.base.outs.iter().map(|p| p.id).collect()
-                        } else {
-                            n.base.ins.iter().map(|p| p.id).collect()
-                        };
-
-                        let single = if is_custom_splitter {
-                            n.base.ins.first().map(|p| p.id)
-                        } else {
-                            n.base.outs.first().map(|p| p.id)
-                        };
-
-                        (multi, single)
-                    } else {
-                        (Vec::new(), None)
-                    };
-
-                // Count locked/unlocked multi pins
-                let mut all_locked_ids = Vec::new();
-                let mut all_unlocked_ids = Vec::new();
-
-                for &mpid in &multi_pin_ids {
-                    if let Some((mpid_node_id, _mpid_direction, pi)) = self.find_pin_location(mpid)
-                    {
-                        let mpid_node_idx = self.find_node_index(mpid_node_id).unwrap();
-                        let is_locked = if let Some(n) =
-                            self.nodes[mpid_node_idx].downcast_ref::<OrganizerNode>()
-                        {
-                            n.base.get_pin_by_flat_index(pi).unwrap().locked
-                        } else {
-                            false
-                        };
-
-                        if is_locked {
-                            all_locked_ids.push(mpid);
-                        } else {
-                            all_unlocked_ids.push(mpid);
-                        }
+            } else if let Some(n) = node_any.downcast_mut::<OrganizerNode>() {
+                for p in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if connected_set.contains(&p.id) {
+                        p.locked = locked;
                     }
                 }
-
-                // Single pin updated (input for CustomSplitter, output for Merger)
-                let is_single_side = (direction == PinDirection::Input && is_custom_splitter)
-                    || (direction == PinDirection::Output && !is_custom_splitter);
-
-                if is_single_side {
-                    // If locked and only one unlocked multi pin remaining, lock it
-                    if locked && all_unlocked_ids.len() == 1 {
-                        self.set_pin_locked(all_unlocked_ids[0], locked)?;
-                    }
-                    // If unlocked and all multi pins are locked, unlock all multi pins
-                    else if !locked && all_unlocked_ids.is_empty() {
-                        for &mpid in &multi_pin_ids {
-                            self.set_pin_locked(mpid, locked)?;
-                        }
-                    }
-                } else {
-                    // Multi pin updated
-                    if let Some(spid) = single_pin_id {
-                        let single_locked = if let Some((spid_node_id, _spid_direction, pi)) =
-                            self.find_pin_location(spid)
-                        {
-                            let spid_node_idx = self.find_node_index(spid_node_id).unwrap();
-                            if let Some(n) =
-                                self.nodes[spid_node_idx].downcast_ref::<OrganizerNode>()
-                            {
-                                n.base.get_pin_by_flat_index(pi).unwrap().locked
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-
-                        // If all multi pins locked, lock single pin
-                        if all_unlocked_ids.is_empty() {
-                            if !single_locked {
-                                self.set_pin_locked(spid, true)?;
-                            }
-                        }
-                        // If we just locked and single is locked with only one unlocked, lock last one
-                        else if locked && single_locked && all_unlocked_ids.len() == 1 {
-                            self.set_pin_locked(all_unlocked_ids[0], locked)?;
-                        }
-                        // If we just unlocked, single was locked, and now one unlocked, unlock single
-                        else if !locked && single_locked && all_unlocked_ids.len() == 1 {
-                            self.set_pin_locked(spid, locked)?;
-                        }
+            } else if let Some(n) = node_any.downcast_mut::<GroupNode>() {
+                for p in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if connected_set.contains(&p.id) {
+                        p.locked = locked;
                     }
                 }
-            }
-            NodeKind::Sink => {
-                // No special logic for sink nodes
+            } else if let Some(n) = node_any.downcast_mut::<SinkNode>() {
+                for p in n.base.ins.iter_mut() {
+                    if connected_set.contains(&p.id) {
+                        p.locked = locked;
+                    }
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// Return the union of connected pins for all pins on a node.
+    /// Useful for node-level locking that should affect *all* graph components touching the node.
+    pub fn get_all_connected_pins_for_node(&self, node_id: u64) -> Vec<u64> {
+        let mut set: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let node_idx = match self.find_node_index(node_id) {
+            Some(i) => i,
+            None => return Vec::new(),
+        };
+        let node_any = &self.nodes[node_idx];
+        let mut pin_ids: Vec<u64> = Vec::new();
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                pin_ids.push(p.id);
+            }
+        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+            for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                pin_ids.push(p.id);
+            }
+        } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+            for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                pin_ids.push(p.id);
+            }
+        } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+            for p in n.base.ins.iter() {
+                pin_ids.push(p.id);
+            }
+        }
+
+        for pid in pin_ids {
+            for p in self.get_connected_pins(pid) {
+                set.insert(p);
+            }
+        }
+
+        set.into_iter().collect()
+    }
+
+    /// Set node-level lock by locking/unlocking every connected component that touches the node.
+    pub fn set_node_locked(&mut self, node_id: u64, locked: bool) -> Result<(), String> {
+        // Validate node exists
+        self.find_node_index(node_id).ok_or("Node not found")?;
+
+        let all_pins = self.get_all_connected_pins_for_node(node_id);
+        let all_set: std::collections::HashSet<u64> = all_pins.into_iter().collect();
+
+        // Apply lock flag to all pins in the union
+        for node_any in &mut self.nodes {
+            if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+                for p in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if all_set.contains(&p.id) {
+                        p.locked = locked;
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_mut::<OrganizerNode>() {
+                for p in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if all_set.contains(&p.id) {
+                        p.locked = locked;
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_mut::<GroupNode>() {
+                for p in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if all_set.contains(&p.id) {
+                        p.locked = locked;
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_mut::<SinkNode>() {
+                for p in n.base.ins.iter_mut() {
+                    if all_set.contains(&p.id) {
+                        p.locked = locked;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Set node-level lock and return the set of affected node ids (for UI sync)
+    pub fn set_node_locked_and_get_affected(&mut self, node_id: u64, locked: bool) -> Result<Vec<u64>, String> {
+        // Apply the locks to pins (this will validate node existence)
+        self.set_node_locked(node_id, locked)?;
+
+        // Collect affected nodes from all connected pins on the node
+        let mut affected: std::collections::HashSet<u64> = std::collections::HashSet::new();
+        let connected_pins = self.get_all_connected_pins_for_node(node_id);
+        for pid in connected_pins {
+            if let Some((nid, _d, _i)) = self.find_pin_location(pid) {
+                affected.insert(nid);
+            }
+        }
+        // If no affected nodes found, include the original node
+        if affected.is_empty() {
+            affected.insert(node_id);
+        }
+        Ok(affected.into_iter().collect())
+    }
+
+    /// Return all pins connected to a given pin (via links and same-node pins).
+    /// Avoid cycles by tracking visited nodes.
+    pub fn get_connected_pins(&self, start_pin_id: u64) -> Vec<u64> {
+        use std::collections::{HashSet, VecDeque};
+
+        let mut queue: VecDeque<u64> = VecDeque::new();
+        let mut visited_pins: HashSet<u64> = HashSet::new();
+        let mut visited_nodes: HashSet<u64> = HashSet::new();
+
+        queue.push_back(start_pin_id);
+        visited_pins.insert(start_pin_id);
+
+        while let Some(pid) = queue.pop_front() {
+            // Follow links to other pins
+            for link in &self.links {
+                if link.start_pin_id == pid {
+                    if visited_pins.insert(link.end_pin_id) {
+                        queue.push_back(link.end_pin_id);
+                    }
+                } else if link.end_pin_id == pid {
+                    if visited_pins.insert(link.start_pin_id) {
+                        queue.push_back(link.start_pin_id);
+                    }
+                }
+            }
+
+            // Add all pins of the same node (only once per node to avoid cycles)
+            if let Some((node_id, _dir, _idx)) = self.find_pin_location(pid) {
+                if visited_nodes.insert(node_id) {
+                    if let Some(node_idx) = self.find_node_index(node_id) {
+                        let node_any = &self.nodes[node_idx];
+                        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                            for p in n.base.all_pins() {
+                                if visited_pins.insert(p.id) {
+                                    queue.push_back(p.id);
+                                }
+                            }
+                        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                            // Merger and custom splitters are special: do NOT traverse to other pins
+                            // on the same node (they represent independent flows). For other organizer
+                            // kinds (including GameSplitter) include all pins of the node as before.
+                            match n.base.kind {
+                                NodeKind::Merger | NodeKind::CustomSplitter => {
+                                    // Do nothing: only the starting pin remains in visited_pins
+                                }
+                                _ => {
+                                    for p in n.base.all_pins() {
+                                        if visited_pins.insert(p.id) {
+                                            queue.push_back(p.id);
+                                        }
+                                    }
+                                }
+                            }
+                        } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                            for p in n.base.all_pins() {
+                                if visited_pins.insert(p.id) {
+                                    queue.push_back(p.id);
+                                }
+                            }
+                        } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+                            for p in n.base.ins.iter() {
+                                if visited_pins.insert(p.id) {
+                                    queue.push_back(p.id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        visited_pins.into_iter().collect()
     }
 
     /// Propagate production rate changes through the graph starting at a pin.
@@ -2782,5 +2785,252 @@ mod tests {
         // Node rates
         assert_eq!(a_node.current_rate, FractionalNumber::new(3, 1)); // 12 / 4
         assert_eq!(b_node.current_rate, FractionalNumber::new(6, 1)); // 12 / 2
+    }
+
+    #[test]
+    fn get_connected_pins_chain() {
+        let mut app = ProductionApp::new();
+        // Node A
+        let a_id = app.get_next_id();
+        let mut a = CraftNode::new(a_id, "A".to_string());
+        let a_in = app.get_next_id();
+        a.base.ins.push(Pin::new(a_in, PinDirection::Input, a_id, None, false, FractionalNumber::default()));
+        let a_out = app.get_next_id();
+        a.base.outs.push(Pin::new(a_out, PinDirection::Output, a_id, None, false, FractionalNumber::default()));
+        app.nodes.push(Box::new(a));
+        // Node B
+        let b_id = app.get_next_id();
+        let mut b = CraftNode::new(b_id, "B".to_string());
+        let b_in = app.get_next_id();
+        b.base.ins.push(Pin::new(b_in, PinDirection::Input, b_id, None, false, FractionalNumber::default()));
+        let b_out = app.get_next_id();
+        b.base.outs.push(Pin::new(b_out, PinDirection::Output, b_id, None, false, FractionalNumber::default()));
+        app.nodes.push(Box::new(b));
+
+        // Connect A.out -> B.in
+        let (_l, _w) = app.create_link(a_out, b_in).expect("create link");
+
+        let connected = app.get_connected_pins(a_out);
+        let set: std::collections::HashSet<u64> = connected.into_iter().collect();
+        let expected: std::collections::HashSet<u64> = [a_in, a_out, b_in, b_out].iter().cloned().collect();
+        assert_eq!(set, expected);
+    }
+
+    #[test]
+    fn get_connected_pins_loop() {
+        let mut app = ProductionApp::new();
+        // Node A
+        let a_id = app.get_next_id();
+        let mut a = CraftNode::new(a_id, "A".to_string());
+        let a_in = app.get_next_id();
+        a.base.ins.push(Pin::new(a_in, PinDirection::Input, a_id, None, false, FractionalNumber::default()));
+        let a_out = app.get_next_id();
+        a.base.outs.push(Pin::new(a_out, PinDirection::Output, a_id, None, false, FractionalNumber::default()));
+        app.nodes.push(Box::new(a));
+        // Node B
+        let b_id = app.get_next_id();
+        let mut b = CraftNode::new(b_id, "B".to_string());
+        let b_in = app.get_next_id();
+        b.base.ins.push(Pin::new(b_in, PinDirection::Input, b_id, None, false, FractionalNumber::default()));
+        let b_out = app.get_next_id();
+        b.base.outs.push(Pin::new(b_out, PinDirection::Output, b_id, None, false, FractionalNumber::default()));
+        app.nodes.push(Box::new(b));
+
+        // Connect A.out -> B.in and B.out -> A.in (loop)
+        let (_l1, _w1) = app.create_link(a_out, b_in).expect("create link");
+        let (_l2, _w2) = app.create_link(b_out, a_in).expect("create link");
+
+        let connected = app.get_connected_pins(a_out);
+        let set: std::collections::HashSet<u64> = connected.into_iter().collect();
+        let expected: std::collections::HashSet<u64> = [a_in, a_out, b_in, b_out].iter().cloned().collect();
+        assert_eq!(set, expected);
+    }
+
+    #[test]
+    fn get_connected_pins_merger() {
+        let mut app = ProductionApp::new();
+        // Merger node
+        let m_id = app.get_next_id();
+        let mut m = OrganizerNode::new(m_id, NodeKind::Merger, None);
+        let m_in0 = app.get_next_id();
+        m.base.ins.push(Pin::new(m_in0, PinDirection::Input, m_id, Some("X".to_string()), false, FractionalNumber::default()));
+        let m_in1 = app.get_next_id();
+        m.base.ins.push(Pin::new(m_in1, PinDirection::Input, m_id, Some("X".to_string()), false, FractionalNumber::default()));
+        let m_out = app.get_next_id();
+        m.base.outs.push(Pin::new(m_out, PinDirection::Output, m_id, Some("X".to_string()), false, FractionalNumber::default()));
+        app.nodes.push(Box::new(m));
+
+        // Another node that feeds m_in0
+        let n_id = app.get_next_id();
+        let mut n = CraftNode::new(n_id, "N".to_string());
+        let n_out = app.get_next_id();
+        n.base.outs.push(Pin::new(n_out, PinDirection::Output, n_id, Some("X".to_string()), false, FractionalNumber::default()));
+        app.nodes.push(Box::new(n));
+
+        // Connect n.out -> m.in0
+        let (_l, _w) = app.create_link(n_out, m_in0).expect("create link");
+
+        let connected = app.get_connected_pins(m_in0);
+        let set: std::collections::HashSet<u64> = connected.into_iter().collect();
+        let expected: std::collections::HashSet<u64> = [m_in0, n_out].iter().cloned().collect();
+        assert_eq!(set, expected);
+    }
+
+    #[test]
+    fn get_connected_pins_custom_splitter() {
+        let mut app = ProductionApp::new();
+        // Custom splitter node
+        let s_id = app.get_next_id();
+        let mut s = OrganizerNode::new(s_id, NodeKind::CustomSplitter, None);
+        let s_in = app.get_next_id();
+        s.base.ins.push(Pin::new(s_in, PinDirection::Input, s_id, Some("Y".to_string()), false, FractionalNumber::default()));
+        let s_out0 = app.get_next_id();
+        s.base.outs.push(Pin::new(s_out0, PinDirection::Output, s_id, Some("Y".to_string()), false, FractionalNumber::default()));
+        let s_out1 = app.get_next_id();
+        s.base.outs.push(Pin::new(s_out1, PinDirection::Output, s_id, Some("Y".to_string()), false, FractionalNumber::default()));
+        app.nodes.push(Box::new(s));
+
+        // Another node that receives s_out0
+        let n_id = app.get_next_id();
+        let mut n = CraftNode::new(n_id, "N".to_string());
+        let n_in = app.get_next_id();
+        n.base.ins.push(Pin::new(n_in, PinDirection::Input, n_id, Some("Y".to_string()), false, FractionalNumber::default()));
+        app.nodes.push(Box::new(n));
+
+        // Connect s.out0 -> n.in
+        let (_l, _w) = app.create_link(s_out0, n_in).expect("create link");
+
+        let connected = app.get_connected_pins(s_out0);
+        let set: std::collections::HashSet<u64> = connected.into_iter().collect();
+        // Custom splitter is a special case: don't include sibling pins on the splitter node
+        let expected: std::collections::HashSet<u64> = [s_out0, n_in].iter().cloned().collect();
+        assert_eq!(set, expected);
+    }
+
+    #[test]
+    fn get_connected_pins_game_splitter() {
+        let mut app = ProductionApp::new();
+        // Game splitter node (treated as special as well)
+        let s_id = app.get_next_id();
+        let mut s = OrganizerNode::new(s_id, NodeKind::GameSplitter, None);
+        let s_in = app.get_next_id();
+        s.base.ins.push(Pin::new(s_in, PinDirection::Input, s_id, Some("Z".to_string()), false, FractionalNumber::default()));
+        let s_out0 = app.get_next_id();
+        s.base.outs.push(Pin::new(s_out0, PinDirection::Output, s_id, Some("Z".to_string()), false, FractionalNumber::default()));
+        let s_out1 = app.get_next_id();
+        s.base.outs.push(Pin::new(s_out1, PinDirection::Output, s_id, Some("Z".to_string()), false, FractionalNumber::default()));
+        app.nodes.push(Box::new(s));
+
+        // Another node that receives s_out0
+        let n_id = app.get_next_id();
+        let mut n = CraftNode::new(n_id, "N".to_string());
+        let n_in = app.get_next_id();
+        n.base.ins.push(Pin::new(n_in, PinDirection::Input, n_id, Some("Z".to_string()), false, FractionalNumber::default()));
+        app.nodes.push(Box::new(n));
+
+        // Connect s.out0 -> n.in
+        let (_l, _w) = app.create_link(s_out0, n_in).expect("create link");
+
+        let connected = app.get_connected_pins(s_out0);
+        let set: std::collections::HashSet<u64> = connected.into_iter().collect();
+        // Game splitter behaves like a regular node: include sibling pins on the splitter node
+        let expected: std::collections::HashSet<u64> = [s_out0, s_out1, s_in, n_in].iter().cloned().collect();
+        assert_eq!(set, expected);
+    }
+
+    #[test]
+    fn get_connected_pins_lock_propagation() {
+        use std::collections::HashSet;
+
+        let mut app = ProductionApp::new();
+
+        // Node A (craft)
+        let a_id = app.get_next_id();
+        let mut a = CraftNode::new(a_id, "A".to_string());
+        let a_in = app.get_next_id();
+        a.base.ins.push(Pin::new(a_in, PinDirection::Input, a_id, None, false, FractionalNumber::default()));
+        let a_out = app.get_next_id();
+        a.base.outs.push(Pin::new(a_out, PinDirection::Output, a_id, None, false, FractionalNumber::default()));
+        app.nodes.push(Box::new(a));
+
+        // Game splitter node
+        let s_id = app.get_next_id();
+        let mut s = OrganizerNode::new(s_id, NodeKind::GameSplitter, None);
+        let s_in = app.get_next_id();
+        s.base.ins.push(Pin::new(s_in, PinDirection::Input, s_id, None, false, FractionalNumber::default()));
+        let s_out0 = app.get_next_id();
+        s.base.outs.push(Pin::new(s_out0, PinDirection::Output, s_id, None, false, FractionalNumber::default()));
+        let s_out1 = app.get_next_id();
+        s.base.outs.push(Pin::new(s_out1, PinDirection::Output, s_id, None, false, FractionalNumber::default()));
+        app.nodes.push(Box::new(s));
+
+        // Node B (craft)
+        let b_id = app.get_next_id();
+        let mut b = CraftNode::new(b_id, "B".to_string());
+        let b_in = app.get_next_id();
+        b.base.ins.push(Pin::new(b_in, PinDirection::Input, b_id, None, false, FractionalNumber::default()));
+        let b_out = app.get_next_id();
+        b.base.outs.push(Pin::new(b_out, PinDirection::Output, b_id, None, false, FractionalNumber::default()));
+        app.nodes.push(Box::new(b));
+
+        // Node C (craft)
+        let c_id = app.get_next_id();
+        let mut c = CraftNode::new(c_id, "C".to_string());
+        let c_in = app.get_next_id();
+        c.base.ins.push(Pin::new(c_in, PinDirection::Input, c_id, None, false, FractionalNumber::default()));
+        let c_out = app.get_next_id();
+        c.base.outs.push(Pin::new(c_out, PinDirection::Output, c_id, None, false, FractionalNumber::default()));
+        app.nodes.push(Box::new(c));
+
+        // Connect A.out -> S.in, S.out0 -> B.in, S.out1 -> C.in
+        app.create_link(a_out, s_in).expect("create link");
+        app.create_link(s_out0, b_in).expect("create link");
+        app.create_link(s_out1, c_in).expect("create link");
+
+        // Get connected pins starting from a_out
+        let connected = app.get_connected_pins(a_out);
+        let connected_set: HashSet<u64> = connected.into_iter().collect();
+
+        // Ensure no pins are locked initially
+        let mut initial_locked = HashSet::new();
+        for node_any in &app.nodes {
+            if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                for p in n.base.all_pins() {
+                    if p.locked { initial_locked.insert(p.id); }
+                }
+            } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                for p in n.base.all_pins() {
+                    if p.locked { initial_locked.insert(p.id); }
+                }
+            }
+        }
+        assert!(initial_locked.is_empty());
+
+        // Lock the start pin
+        app.set_pin_locked(a_out, true).expect("set_pin_locked");
+
+        // Collect all locked pins after propagation
+        let mut locked = HashSet::new();
+        for node_any in &app.nodes {
+            if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                for p in n.base.all_pins() {
+                    if p.locked { locked.insert(p.id); }
+                }
+            } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                for p in n.base.all_pins() {
+                    if p.locked { locked.insert(p.id); }
+                }
+            } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                for p in n.base.all_pins() {
+                    if p.locked { locked.insert(p.id); }
+                }
+            } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+                for p in n.base.ins.iter() {
+                    if p.locked { locked.insert(p.id); }
+                }
+            }
+        }
+
+        assert_eq!(locked, connected_set);
     }
 }
