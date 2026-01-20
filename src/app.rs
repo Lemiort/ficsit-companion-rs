@@ -214,6 +214,8 @@ struct SnarlViewer {
 
     // Pending dropped wire action recorded by show_dropped_wire_menu / show_graph_menu
     pending_dropped_wire: Option<PendingDroppedWire>,
+    // UI-only locked nodes set (visual lock toggled by right-click on node header)
+    ui_locked_nodes: std::collections::HashSet<u64>,
 
     // Recent pin edit successes (node_id, direction, pin_idx) -> Instant
     pub pin_success: std::collections::HashMap<(u64, PinDirection, usize), std::time::Instant>,
@@ -337,14 +339,14 @@ impl SnarlViewer {
 
         // If outer rect was clicked, ensure the inner TextEdit gets focus
         if alloc_response.clicked() {
-            eprintln!("[UI][debug] outer rect clicked at rect={:?}", rect);
+            log::debug!("[UI][debug] outer rect clicked at rect={:?}", rect);
             response.request_focus();
-            eprintln!("[UI][debug] requested focus for inner TextEdit");
+            log::debug!("[UI][debug] requested focus for inner TextEdit");
         }
 
         // Focus highlight (blue)
         if response.has_focus() || response.gained_focus() {
-            eprintln!("[UI][debug] response focus state: has_focus={} gained_focus={} clicked={}",
+            log::debug!("[UI][debug] response focus state: has_focus={} gained_focus={} clicked={}",
                       response.has_focus(), response.gained_focus(), response.clicked());
             ui.painter().rect_filled(
                 rect.expand(2.0),
@@ -1171,14 +1173,14 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                     let desired_width = 88.0;
                     let mut tmp = rate.clone();
                     let disabled = node.input_locked.get(idx).copied().unwrap_or(false);
+                    let node_locked = self.ui_locked_nodes.contains(&node.id);
                     let response =
-                        self.render_fractional_input(ui, &key, &mut tmp, desired_width, disabled);
+                        self.render_fractional_input(ui, &key, &mut tmp, desired_width, disabled || node_locked);
                     // Submit when the user presses Enter while focused, or when the field loses focus and the text changed.
                     let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     // Debug info to help diagnose missed submits
                     if enter_pressed || response.lost_focus() || response.changed() || response.has_focus() {
-                        eprintln!("[UI][debug] key={} enter={} has_focus={} changed={} lost_focus={}",
-                                  key, enter_pressed, response.has_focus(), response.changed(), response.lost_focus());
+                        log::debug!("[UI][debug] key={} enter={} has_focus={} changed={} lost_focus={}", key, enter_pressed, response.has_focus(), response.changed(), response.lost_focus());
                     }
                     // Be tolerant: allow Enter to submit if the field has focus or the mouse is hovering it
                     // Also accept Enter if the edit buffer differs from the displayed rate string (user typed without focusing)
@@ -1190,10 +1192,10 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                     };
                     let submit = (enter_pressed && (response.has_focus() || response.hovered() || typed_differs)) || (response.lost_focus() && response.changed());
                     if enter_pressed && !response.has_focus() && response.hovered() {
-                        eprintln!("[UI][debug] Enter pressed while not focused but hovered: key={}", key);
+                        log::debug!("[UI][debug] Enter pressed while not focused but hovered: key={}", key);
                     }
                     if enter_pressed && typed_differs {
-                        eprintln!("[UI][debug] Enter pressed and edit buffer differs from displayed value: key={} buf={:?} displayed={}", key, buf_opt, displayed_str);
+                        log::debug!("[UI][debug] Enter pressed and edit buffer differs from displayed value: key={} buf={:?} displayed={}", key, buf_opt, displayed_str);
                     }
                     if submit {
                         if let Some(buf) = self.edit_buffers.get(&key) {
@@ -1203,9 +1205,9 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                 idx,
                                 buf.clone(),
                             ));
-                            eprintln!("[UI] queued edit: node={} dir=Input idx={} -> {}", node.id, idx, buf);
+                            log::info!("[UI] queued edit: node={} dir=Input idx={} -> {}", node.id, idx, buf);
                         } else {
-                            eprintln!("[UI][debug] edit_buffers missing for key {}", key);
+                            log::debug!("[UI][debug] edit_buffers missing for key {}", key);
                         }
                     }
 
@@ -1307,12 +1309,13 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                         let desired_width = 88.0;
                         let mut tmp = rate.clone();
                         let disabled = node.output_locked.get(idx).copied().unwrap_or(false);
+                        let node_locked = self.ui_locked_nodes.contains(&node.id);
                         let response = self.render_fractional_input(
                             ui,
                             &key,
                             &mut tmp,
                             desired_width,
-                            disabled,
+                            disabled || node_locked,
                         );
                         rate_rect = Some(response.rect);
                         // Submit when the user presses Enter while focused, or when the field loses focus and the text changed.
@@ -1332,10 +1335,10 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                         };
                         let submit = (enter_pressed && (response.has_focus() || response.hovered() || typed_differs)) || (response.lost_focus() && response.changed());
                         if enter_pressed && !response.has_focus() && response.hovered() {
-                            eprintln!("[UI][debug] Enter pressed while not focused but hovered: key={}", key);
+                            log::debug!("[UI][debug] Enter pressed while not focused but hovered: key={}", key);
                         }
                         if enter_pressed && typed_differs {
-                            eprintln!("[UI][debug] Enter pressed and edit buffer differs from displayed value: key={} buf={:?} displayed={}", key, buf_opt, displayed_str);
+                            log::debug!("[UI][debug] Enter pressed and edit buffer differs from displayed value: key={} buf={:?} displayed={}", key, buf_opt, displayed_str);
                         }
                         if submit {
                             if let Some(buf) = self.edit_buffers.get(&key) {
@@ -1345,9 +1348,9 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                     idx,
                                     buf.clone(),
                                 ));
-                                eprintln!("[UI] queued edit: node={} dir=Output idx={} -> {}", node.id, idx, buf);
+                                log::info!("[UI] queued edit: node={} dir=Output idx={} -> {}", node.id, idx, buf);
                             } else {
-                                eprintln!("[UI][debug] edit_buffers missing for key {}", key);
+                                log::debug!("[UI][debug] edit_buffers missing for key {}", key);
                             }
                         }
 
@@ -1480,18 +1483,18 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                         if !node.building_count_str.is_empty() {
                                             let key = format!("building:{}", node.id);
                                             let mut tmp = node.building_count_str.clone();
+                                            let node_locked = self.ui_locked_nodes.contains(&node.id);
                                             let r = self.render_fractional_input(
                                                 ui,
                                                 &key,
                                                 &mut tmp,
                                                 center_field_width,
-                                                false,
+                                                false || node_locked,
                                             );
                                             // Commit building count edits on Enter (focused/hovered/typed-diff) or lost-focus+changed
                                             let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
                                             if enter_pressed || r.lost_focus() || r.changed() || r.has_focus() {
-                                                eprintln!("[UI][debug] key={} enter={} has_focus={} changed={} lost_focus={}",
-                                                          key, enter_pressed, r.has_focus(), r.changed(), r.lost_focus());
+                                                log::debug!("[UI][debug] key={} enter={} has_focus={} changed={} lost_focus={}", key, enter_pressed, r.has_focus(), r.changed(), r.lost_focus());
                                             }
                                             let buf_opt = self.edit_buffers.get(&key).cloned();
                                             let displayed_str = node.building_count_str.clone();
@@ -1503,9 +1506,9 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                             if submit {
                                                 if let Some(buf) = self.edit_buffers.get(&key) {
                                                     self.pending_node_building_edits.push((node.id, buf.clone()));
-                                                    eprintln!("[UI] queued building edit: node={} -> {}", node.id, buf);
+                                                    log::info!("[UI] queued building edit: node={} -> {}", node.id, buf);
                                                 } else {
-                                                    eprintln!("[UI][debug] edit_buffers missing for key {}", key);
+                                                    log::debug!("[UI][debug] edit_buffers missing for key {}", key);
                                                 }
                                             }
                                         }
@@ -1577,12 +1580,13 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                                             .get(0)
                                                             .copied()
                                                             .unwrap_or(false);
+                                                    let node_locked = self.ui_locked_nodes.contains(&node.id);
                                                     let resp = self.render_fractional_input(
                                                         ui,
                                                         &key,
                                                         &mut tmp,
                                                         somersloop_width,
-                                                        is_locked,
+                                                        is_locked || node_locked,
                                                     );
 
                                                     if resp.lost_focus() && resp.changed() {
@@ -1748,6 +1752,35 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                 }
             });
         }
+    }
+
+    fn has_node_menu(&mut self, _node: &EditorNode) -> bool {
+        // Enable node menu (used on RMB). We'll intercept the menu action in `show_node_menu` to toggle visual lock and immediately close
+        true
+    }
+
+    fn show_node_menu(
+        &mut self,
+        node: egui_snarl::NodeId,
+        _inputs: &[egui_snarl::InPin],
+        _outputs: &[egui_snarl::OutPin],
+        ui: &mut egui::Ui,
+        snarl: &mut egui_snarl::Snarl<EditorNode>,
+    ) {
+        // Toggle visual lock for this node and close menu immediately
+        if let Some(node_ref) = snarl.get_node(node) {
+            let nid = node_ref.id;
+            let was_locked = self.ui_locked_nodes.contains(&nid);
+            if was_locked {
+                self.ui_locked_nodes.remove(&nid);
+                log::info!("[UI] node {} unlocked (visual) via RMB menu", nid);
+            } else {
+                self.ui_locked_nodes.insert(nid);
+                log::info!("[UI] node {} locked (visual) via RMB menu", nid);
+            }
+        }
+        // Close menu so nothing else is shown
+        ui.close();
     }
 
     fn has_graph_menu(
@@ -2007,18 +2040,18 @@ impl Default for TemplateApp {
                         );
                     }
                     Err(e) => {
-                        eprintln!("✗ Failed to load game data: {}", e);
+                        log::error!("✗ Failed to load game data: {}", e);
                     }
                 }
             } else {
-                eprintln!("✗ Warning: Could not read assets/satisfactory.json");
+                log::warn!("✗ Warning: Could not read assets/satisfactory.json");
             }
         }
 
         #[cfg(target_arch = "wasm32")]
         {
             // For web, we'll need to load this differently (fetch API, etc.)
-            eprintln!("Web platform: game data loading not yet implemented");
+            log::warn!("Web platform: game data loading not yet implemented");
         }
 
         let mut snarl_style = egui_snarl::ui::SnarlStyle::new();
@@ -2109,10 +2142,7 @@ impl TemplateApp {
                                 .insert("Somersloop".to_owned(), texture);
                         }
                         Err(e) => {
-                            eprintln!(
-                                "Failed to decode somersloop icon {}: {}",
-                                somersloop_path, e
-                            );
+                            log::warn!("Failed to decode somersloop icon {}: {}", somersloop_path, e);
                         }
                     },
                     Err(_) => {
@@ -2147,24 +2177,21 @@ impl TemplateApp {
                             self.item_icon_cache.insert(name.clone(), texture);
                         }
                         Err(e) => {
-                            eprintln!("Failed to decode icon {}: {}", path, e);
+                            log::warn!("Failed to decode icon {}: {}", path, e);
                         }
                     },
                     Err(e) => {
-                        eprintln!("Failed to open icon {}: {}", path, e);
+                        log::warn!("Failed to open icon {}: {}", path, e);
                     }
                 }
             }
-            println!(
-                "Loaded {} item icons into cache",
-                self.item_icon_cache.len()
-            );
+            log::info!("Loaded {} item icons into cache", self.item_icon_cache.len());
         }
 
         #[cfg(target_arch = "wasm32")]
         {
             // Web loading requires fetching assets; skip for now
-            eprintln!("Web: item texture loading not implemented");
+            log::warn!("Web: item texture loading not implemented");
         }
     }
 
@@ -3035,7 +3062,7 @@ impl TemplateApp {
                 match crate::fractional_number::FractionalNumber::from_string(&text) {
                     Ok(f) => {
                         if crate::rate_calculator::validate_rate(&f) {
-                            eprintln!("[UI] processing pending edit: node={} dir={:?} idx={} parsed={}", node_id, dir, idx, f.to_fraction_string());
+                            log::info!("[UI] processing pending edit: node={} dir={:?} idx={} parsed={}", node_id, dir, idx, f.to_fraction_string());
                             match self.production_app.set_pin_rate(node_id, dir, idx, f) {
                                 Ok(()) => {
                                     // Success feedback and refresh affected nodes (the node itself and direct neighbors)
@@ -3228,7 +3255,7 @@ impl TemplateApp {
                 match crate::fractional_number::FractionalNumber::from_string(&text) {
                     Ok(f) => {
                         if crate::rate_calculator::validate_rate(&f) {
-                            eprintln!("[UI] processing pending building edit: node={} parsed={}", node_id, f.to_fraction_string());
+                            log::info!("[UI] processing pending building edit: node={} parsed={}", node_id, f.to_fraction_string());
                             match self.production_app.set_node_building_count(node_id, f) {
                                 Ok(()) => {
                                     self.error_message = "Updated building count".to_string();
@@ -3463,7 +3490,7 @@ impl TemplateApp {
                         parts.push(format!("{}->n/a", nid));
                     }
                 }
-                eprintln!("[UI] refreshed nodes: {}", parts.join(", "));
+                log::debug!("[UI] refreshed nodes: {}", parts.join(", "));
             }
         });
     }
