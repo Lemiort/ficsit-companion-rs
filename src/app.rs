@@ -1995,6 +1995,39 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
             self.sync_merger_splitter(snarl, nid);
         }
     }
+
+    /// Called when the user explicitly disconnects a single wire (e.g., right-click a hovered wire)
+    fn disconnect(&mut self, from: &egui_snarl::OutPin, to: &egui_snarl::InPin, snarl: &mut egui_snarl::Snarl<EditorNode>) {
+        // Record the disconnect for the TemplateApp to process production model changes
+        self.pending_disconnects.push((from.id, to.id));
+        log::debug!("[UI] queued pending_disconnect: out={:?} in={:?} (disconnect)", from.id, to.id);
+        // Also perform the visual disconnect so UI stays in sync
+        snarl.disconnect(from.id, to.id);
+    }
+
+    /// Called when user requests dropping all outputs (right-click on an output pin)
+    fn drop_outputs(&mut self, pin: &egui_snarl::OutPin, snarl: &mut egui_snarl::Snarl<EditorNode>) {
+        // enqueue each removed wire
+        let remotes = pin.remotes.clone();
+        for inp in remotes {
+            self.pending_disconnects.push((pin.id, inp));
+            log::debug!("[UI] queued pending_disconnect: out={:?} in={:?} (drop_outputs)", pin.id, inp);
+        }
+        // perform the actual removal
+        snarl.drop_outputs(pin.id);
+    }
+
+    /// Called when user requests dropping all inputs (right-click on an input pin)
+    fn drop_inputs(&mut self, pin: &egui_snarl::InPin, snarl: &mut egui_snarl::Snarl<EditorNode>) {
+        // enqueue each removed wire
+        let remotes = pin.remotes.clone();
+        for outp in remotes {
+            self.pending_disconnects.push((outp, pin.id));
+            log::debug!("[UI] queued pending_disconnect: out={:?} in={:?} (drop_inputs)", outp, pin.id);
+        }
+        // perform the actual removal
+        snarl.drop_inputs(pin.id);
+    }
 }
 
 /// The main Ficsit Companion application
