@@ -1,4 +1,5 @@
-use crate::production_app::ProductionApp;
+use crate::{FractionalNumber, production_app::ProductionApp};
+use egui::text_edit;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -71,30 +72,30 @@ pub struct EditorNode {
     // Pin metadata for icons, labels, rates and locked state
     pub input_names: Vec<Option<String>>,
     pub input_icons: Vec<Option<egui::TextureId>>,
-    pub input_rates: Vec<Option<String>>,
+    pub input_rates: Vec<Option<crate::fractional_number::FractionalNumber>>,
     pub input_locked: Vec<bool>,
     pub output_names: Vec<Option<String>>,
     pub output_icons: Vec<Option<egui::TextureId>>,
-    pub output_rates: Vec<Option<String>>,
+    pub output_rates: Vec<Option<crate::fractional_number::FractionalNumber>>,
     pub output_locked: Vec<bool>,
 
-    // Building info for craft nodes
-    pub building_count_str: String,
+    // Building info for craft nodes (counts/power as FractionalNumber)
+    pub building_count: Option<crate::fractional_number::FractionalNumber>,
     pub building_name: String,
-    pub same_clock_power_str: String,
-    pub last_underclock_power_str: String,
+    pub same_clock_power: Option<crate::fractional_number::FractionalNumber>,
+    pub last_underclock_power: Option<crate::fractional_number::FractionalNumber>,
     pub variable_power: bool,
 
     // Somersloop info
-    pub num_somersloop_str: String,
+    pub num_somersloop: Option<crate::fractional_number::FractionalNumber>,
     pub somersloop_mult: Option<crate::fractional_number::FractionalNumber>,
     pub somersloop_icon: Option<egui::TextureId>,
 
     // For group nodes: whether all contained craft nodes are built (None if not applicable)
     pub group_built: Option<bool>,
 
-    // For sink nodes: total sink points expressed as decimal string, and fraction tooltip
-    pub sink_points_str: String,
+    // For sink nodes: total sink points as FractionalNumber, and fraction tooltip
+    pub sink_points: Option<crate::fractional_number::FractionalNumber>,
     pub sink_points_fraction_str: String,
 
     // Optional item type for merger/splitter nodes (shown centered in footer instead of building count / points)
@@ -116,16 +117,16 @@ impl EditorNode {
             output_icons: Vec::new(),
             output_rates: Vec::new(),
             output_locked: Vec::new(),
-            building_count_str: String::new(),
+            building_count: None,
             building_name: String::new(),
-            same_clock_power_str: String::new(),
-            last_underclock_power_str: String::new(),
+            same_clock_power: None,
+            last_underclock_power: None,
             variable_power: false,
-            num_somersloop_str: String::new(),
+            num_somersloop: None,
             somersloop_mult: None,
             somersloop_icon: None,
             group_built: None,
-            sink_points_str: String::new(),
+            sink_points: None,
             sink_points_fraction_str: String::new(),
             item_type: None,
             item_type_icon: None,
@@ -138,11 +139,11 @@ impl EditorNode {
         node_type: impl Into<NodeType>,
         input_names: Vec<Option<String>>,
         input_icons: Vec<Option<egui::TextureId>>,
-        input_rates: Vec<Option<String>>,
+        input_rates: Vec<Option<crate::fractional_number::FractionalNumber>>,
         input_locked: Vec<bool>,
         output_names: Vec<Option<String>>,
         output_icons: Vec<Option<egui::TextureId>>,
-        output_rates: Vec<Option<String>>,
+        output_rates: Vec<Option<crate::fractional_number::FractionalNumber>>,
         output_locked: Vec<bool>,
     ) -> Self {
         Self {
@@ -157,16 +158,16 @@ impl EditorNode {
             output_icons,
             output_rates,
             output_locked,
-            building_count_str: String::new(),
+            building_count: None,
             building_name: String::new(),
-            same_clock_power_str: String::new(),
-            last_underclock_power_str: String::new(),
+            same_clock_power: None,
+            last_underclock_power: None,
             variable_power: false,
-            num_somersloop_str: String::new(),
+            num_somersloop: None,
             somersloop_mult: None,
             somersloop_icon: None,
             group_built: None,
-            sink_points_str: String::new(),
+            sink_points: None,
             sink_points_fraction_str: String::new(),
             item_type: None,
             item_type_icon: None,
@@ -175,7 +176,7 @@ impl EditorNode {
 }
 
 use crate::pin::PinDirection;
-use std::{collections::HashMap, fmt};
+use std::{collections::HashMap, fmt, i64};
 
 #[derive(Default, Debug)]
 struct SnarlViewer {
@@ -194,12 +195,13 @@ struct SnarlViewer {
     edit_buffers: HashMap<String, String>,
 
     // Pending edits committed by the UI that TemplateApp should process after the Snarl widget is shown
-    pending_pin_rate_edits: Vec<(u64, PinDirection, usize, String)>,
-    // Pending somersloop edits: node_id -> string
-    pending_node_somersloop_edits: Vec<(u64, String)>,
+    // Now carry a parsed FractionalNumber to apply directly to the production model
+    pending_pin_rate_edits: Vec<(u64, PinDirection, usize, crate::fractional_number::FractionalNumber)>,
+    // Pending somersloop edits: node_id -> FractionalNumber
+    pending_node_somersloop_edits: Vec<(u64, crate::fractional_number::FractionalNumber)>,
 
-    // Pending building count edits: node_id -> string
-    pending_node_building_edits: Vec<(u64, String)>,
+    // Pending building count edits: node_id -> FractionalNumber
+    pending_node_building_edits: Vec<(u64, crate::fractional_number::FractionalNumber)>,
 
     // Pending group built edits: node_id -> bool
     pending_node_built_edits: Vec<(u64, bool)>,
@@ -264,7 +266,7 @@ impl SnarlViewer {
     // Fixed inset before the footer '+' (used for both input and output placements)
     const FOOTER_ADD_INSET: f32 = 48.0;
 
-    fn drain_pending_edits(&mut self) -> Vec<(u64, PinDirection, usize, String)> {
+    fn drain_pending_edits(&mut self) -> Vec<(u64, PinDirection, usize, crate::fractional_number::FractionalNumber)> {
         std::mem::take(&mut self.pending_pin_rate_edits)
     }
 
@@ -290,11 +292,11 @@ impl SnarlViewer {
         }
     }
 
-    fn drain_pending_somersloop_edits(&mut self) -> Vec<(u64, String)> {
+    fn drain_pending_somersloop_edits(&mut self) -> Vec<(u64, crate::fractional_number::FractionalNumber)> {
         std::mem::take(&mut self.pending_node_somersloop_edits)
     }
 
-    fn drain_pending_building_edits(&mut self) -> Vec<(u64, String)> {
+    fn drain_pending_building_edits(&mut self) -> Vec<(u64, crate::fractional_number::FractionalNumber)> {
         std::mem::take(&mut self.pending_node_building_edits)
     }
 
@@ -323,61 +325,35 @@ impl SnarlViewer {
     }
 
     // Render a fractional number input similar to C++ RenderInputText.
-    // Returns the response so caller can inspect focus/hover for tooltips.
+    // Accepts a FractionalNumber value to display; returns (Response, Option<parsed>) where
+    // the Option carries a parsed FractionalNumber when the user submitted/committed the field.
     fn render_fractional_input(
         &mut self,
         ui: &mut egui::Ui,
         key: &str,
-        buf: &mut String,
+        initial_value: &mut crate::fractional_number::FractionalNumber,
         width: f32,
         disabled: bool,
-    ) -> egui::Response {
-        // Ensure buffer exists in edit_buffers
+    ) -> Option<FractionalNumber> {
+        // Ensure buffer exists in edit_buffers, initialize from the provided value when absent
         self.edit_buffers
             .entry(key.to_owned())
-            .or_insert_with(|| buf.clone());
+            .or_insert_with(|| initial_value.to_float_string());
         let buf_ref = self.edit_buffers.get_mut(key).unwrap();
 
-        // Reserve a rectangle of exact size for the input
-        // Use hover sense so inner TextEdit receives clicks; capture alloc_response to force-focus inner widget
-        let (rect, alloc_response) = ui.allocate_exact_size(
-            egui::Vec2::new(width, ui.spacing().interact_size.y),
-            egui::Sense::hover(),
-        );
+        let response  = ui.add_enabled(!disabled, egui::TextEdit::singleline(buf_ref).desired_width(width)).on_hover_text(initial_value.to_fraction_string());
 
-        // Active input: render TextEdit inside the reserved rect
-        let text_edit = egui::TextEdit::singleline(buf_ref).desired_width(width);
-        let response = ui
-            .allocate_ui_at_rect(rect, |ui| ui.add_enabled(!disabled, text_edit))
-            .response;
+        let mut committed: Option<FractionalNumber> = None;
 
-        // If outer rect was clicked, ensure the inner TextEdit gets focus
-        if alloc_response.clicked() {
-            log::debug!("[UI][debug] outer rect clicked at rect={:?}", rect);
-            response.request_focus();
-            log::debug!("[UI][debug] requested focus for inner TextEdit");
-        }
-
-        // Focus highlight (blue)
-        if response.has_focus() || response.gained_focus() {
-            log::debug!("[UI][debug] response focus state: has_focus={} gained_focus={} clicked={}",
-                      response.has_focus(), response.gained_focus(), response.clicked());
-            ui.painter().rect_filled(
-                rect.expand(2.0),
-                4.0,
-                egui::Color32::from_rgba_unmultiplied(30, 70, 120, 60),
-            );
-        }
-
-        // Tooltip showing parsed fraction and decimal value
-        if response.hovered() {
-            if let Ok(f) = crate::fractional_number::FractionalNumber::from_string(buf_ref) {
-                let tip = format!("{} = {}", f.to_fraction_string(), f.to_float_string());
-                return response.on_hover_text(tip);
+        // Commit when user presses Enter while focused, or when widget loses focus
+        if (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            || response.lost_focus()
+        {
+            if let Ok(parsed) = FractionalNumber::from_string(buf_ref) {
+                committed = Some(parsed);
             }
         }
-
-        response
+        committed
     }
 
     /// Shared add-node menu renderer for both graph menu and dropped-wire menu
@@ -1170,7 +1146,7 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
     ) -> impl egui_snarl::ui::SnarlPin + 'static {
         let size = egui::Vec2::splat(ui.spacing().interact_size.y * 1.2);
         if let Some(node_ref) = &self.current_node {
-            let node = node_ref.clone();
+            let mut node = node_ref.clone();
             let idx = self.input_cursor;
             self.input_cursor += 1;
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -1188,55 +1164,24 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                 }
 
                 // Rate first (near outer edge for inputs)
-                if let Some(Some(rate)) = node.input_rates.get(idx) {
+                if let Some(Some(rate_f)) = node.input_rates.get_mut(idx) {
                     let key = format!("pin:{}:in:{}", node.id, idx);
                     // Use helper to render small input with highlight
                     // Use a conservative fixed width similar to C++ "0000.000"
                     let desired_width = 88.0;
-                    let mut tmp = rate.clone();
                     let disabled = node.input_locked.get(idx).copied().unwrap_or(false);
                     let node_locked = self.ui_locked_nodes.contains(&node.id);
-                    let response =
-                        self.render_fractional_input(ui, &key, &mut tmp, desired_width, disabled || node_locked);
-                    // Submit when the user presses Enter while focused, or when the field loses focus and the text changed.
-                    let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    // Debug info to help diagnose missed submits
-                    if enter_pressed || response.lost_focus() || response.changed() || response.has_focus() {
-                        log::debug!("[UI][debug] key={} enter={} has_focus={} changed={} lost_focus={}", key, enter_pressed, response.has_focus(), response.changed(), response.lost_focus());
-                    }
-                    // Be tolerant: allow Enter to submit if the field has focus or the mouse is hovering it
-                    // Also accept Enter if the edit buffer differs from the displayed rate string (user typed without focusing)
-                    let buf_opt = self.edit_buffers.get(&key).cloned();
-                    let displayed_str = rate.clone();
-                    let typed_differs = match &buf_opt {
-                        Some(b) => b != &displayed_str,
-                        None => false,
-                    };
-                    let submit = (enter_pressed && (response.has_focus() || response.hovered() || typed_differs)) || (response.lost_focus() && response.changed());
-                    if enter_pressed && !response.has_focus() && response.hovered() {
-                        log::debug!("[UI][debug] Enter pressed while not focused but hovered: key={}", key);
-                    }
-                    if enter_pressed && typed_differs {
-                        log::debug!("[UI][debug] Enter pressed and edit buffer differs from displayed value: key={} buf={:?} displayed={}", key, buf_opt, displayed_str);
-                    }
-                    if submit {
-                        if let Some(buf) = self.edit_buffers.get(&key) {
-                            self.pending_pin_rate_edits.push((
-                                node.id,
-                                PinDirection::Input,
-                                idx,
-                                buf.clone(),
-                            ));
-                            log::info!("[UI] queued edit: node={} dir=Input idx={} -> {}", node.id, idx, buf);
-                        } else {
-                            log::debug!("[UI][debug] edit_buffers missing for key {}", key);
-                        }
-                    }
-
-                    // Inline success indicator (green dot) if this pin had a recent successful edit
-                    if self.is_pin_recent_success(node.id, PinDirection::Input, idx) {
-                        let dot_center = egui::pos2(response.rect.right() + 8.0, response.rect.center().y);
-                        ui.painter().circle_filled(dot_center, 4.0, egui::Color32::from_rgb(80, 200, 120));
+                    let response = self.render_fractional_input(
+                        ui,
+                        &key,
+                        rate_f,
+                        desired_width,
+                        disabled || node_locked,
+                    );
+                    // If widget returned a committed value, enqueue it
+                    if let Some(new_value) = response {
+                        self.pending_pin_rate_edits.push((node.id, PinDirection::Input, idx, new_value));
+                        log::info!("[UI] queued edit: node={} dir=Input idx={} -> {}", node.id, idx, new_value.to_fraction_string());
                     }
                 }
 
@@ -1287,7 +1232,7 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
     ) -> impl egui_snarl::ui::SnarlPin + 'static {
         let size = egui::Vec2::splat(ui.spacing().interact_size.y * 1.2);
         if let Some(node_ref) = &self.current_node {
-            let node = node_ref.clone();
+            let mut node = node_ref.clone();
             let idx = self.output_cursor;
             self.output_cursor += 1;
             // Capture rects for debug logging
@@ -1325,61 +1270,24 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                     }
 
                     // Rate first (near outer edge for outputs)
-                    if let Some(Some(rate)) = node.output_rates.get(idx) {
+                    if let Some(Some(rate_f)) = node.output_rates.get_mut(idx) {
                         let key = format!("pin:{}:out:{}", node.id, idx);
                         // Use a conservative fixed width similar to C++ "0000.000"
                         let desired_width = 88.0;
-                        let mut tmp = rate.clone();
+
                         let disabled = node.output_locked.get(idx).copied().unwrap_or(false);
                         let node_locked = self.ui_locked_nodes.contains(&node.id);
                         let response = self.render_fractional_input(
                             ui,
                             &key,
-                            &mut tmp,
+                            rate_f,
                             desired_width,
                             disabled || node_locked,
                         );
-                        rate_rect = Some(response.rect);
-                        // Submit when the user presses Enter while focused, or when the field loses focus and the text changed.
-                        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        // Debug info to help diagnose missed submits
-                        if enter_pressed || response.lost_focus() || response.changed() || response.has_focus() {
-                            eprintln!("[UI][debug] key={} enter={} has_focus={} changed={} lost_focus={}",
-                                      key, enter_pressed, response.has_focus(), response.changed(), response.lost_focus());
-                        }
-                        // Be tolerant: allow Enter to submit if the field has focus or the mouse is hovering it
-                        // Also accept Enter if the edit buffer differs from the displayed rate string (user typed without focusing)
-                        let buf_opt = self.edit_buffers.get(&key).cloned();
-                        let displayed_str = rate.clone();
-                        let typed_differs = match &buf_opt {
-                            Some(b) => b != &displayed_str,
-                            None => false,
-                        };
-                        let submit = (enter_pressed && (response.has_focus() || response.hovered() || typed_differs)) || (response.lost_focus() && response.changed());
-                        if enter_pressed && !response.has_focus() && response.hovered() {
-                            log::debug!("[UI][debug] Enter pressed while not focused but hovered: key={}", key);
-                        }
-                        if enter_pressed && typed_differs {
-                            log::debug!("[UI][debug] Enter pressed and edit buffer differs from displayed value: key={} buf={:?} displayed={}", key, buf_opt, displayed_str);
-                        }
-                        if submit {
-                            if let Some(buf) = self.edit_buffers.get(&key) {
-                                self.pending_pin_rate_edits.push((
-                                    node.id,
-                                    PinDirection::Output,
-                                    idx,
-                                    buf.clone(),
-                                ));
-                                log::info!("[UI] queued edit: node={} dir=Output idx={} -> {}", node.id, idx, buf);
-                            } else {
-                                log::debug!("[UI][debug] edit_buffers missing for key {}", key);
-                            }
-                        }
-
-                        // Inline success indicator (green dot) if this pin had a recent successful edit
-                        if self.is_pin_recent_success(node.id, PinDirection::Output, idx) {
-                            let dot_center = egui::pos2(response.rect.right() + 8.0, response.rect.center().y);
-                            ui.painter().circle_filled(dot_center, 4.0, egui::Color32::from_rgb(80, 200, 120));
+                        // If widget returned a committed value, enqueue it
+                        if let Some(new_value) = response {
+                            self.pending_pin_rate_edits.push((node.id, PinDirection::Output, idx, new_value));
+                            log::info!("[UI] queued edit: node={} dir=Output idx={} -> {}", node.id, idx, new_value.to_fraction_string());
                         }
                     }
 
@@ -1415,9 +1323,9 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
         // Show footer if node has building, power info (craft nodes) or sink points
         // Also show footer for organizer and sink nodes so we can render add buttons
         !node.building_name.is_empty()
-            || !node.same_clock_power_str.is_empty()
-            || !node.last_underclock_power_str.is_empty()
-            || !node.sink_points_str.is_empty()
+            || node.same_clock_power.is_some()
+            || node.last_underclock_power.is_some()
+            || node.sink_points.is_some()
             || node.node_type == NodeType::CustomSplitter
             || node.node_type == NodeType::GameSplitter
             || node.node_type == NodeType::Merger
@@ -1433,15 +1341,11 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
         _snarl: &mut egui_snarl::Snarl<EditorNode>,
     ) {
         if let Some(node_ref) = &self.current_node {
-            let node = node_ref.clone();
+            let mut node = node_ref.clone();
             ui.vertical(|ui| {
                 // Power + building row matching C++ node bottom: single power input (choice depends on power mode), MW suffix, then pushed node rate + building
-                let power_value = if self.power_equal_clocks {
-                    node.same_clock_power_str.clone()
-                } else {
-                    node.last_underclock_power_str.clone()
-                };
-                if !power_value.is_empty() || !node.building_name.is_empty() {
+                let power_present = if self.power_equal_clocks { node.same_clock_power.is_some() } else { node.last_underclock_power.is_some() };
+                if power_present || !node.building_name.is_empty() {
                     ui.horizontal(|ui| {
                         // Power sizes (number field + spacing + MW label)
                         let power_field_width = ui
@@ -1463,23 +1367,22 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                             .spacing([8.0, 8.0])
                             .min_col_width(ui.available_width() / 3.0)
                             .show(ui, |ui| {
-                                if !power_value.is_empty() {
+                                let display_power = if self.power_equal_clocks { node.same_clock_power.as_mut() } else { node.last_underclock_power.as_mut() };
+                                if let Some(current_power) = display_power {
                                     ui.horizontal(|ui| {
                                         let key = format!("node:{}:power", node.id);
-                                        let mut tmp = power_value.clone();
                                         let locked = true; // Power is always locked in this UI
+
                                         let input_resp = self.render_fractional_input(
                                             ui,
                                             &key,
-                                            &mut tmp,
+                                            current_power,
                                             power_field_width,
                                             locked,
                                         );
                                         // Render combined label ("~MW" when variable) similar to C++
                                         let label_resp = ui.label(power_label_text);
-                                        if node.variable_power
-                                            && (label_resp.hovered() || input_resp.hovered())
-                                        {
+                                        if node.variable_power && label_resp.hovered() {
                                             label_resp.on_hover_text("Average power");
                                         }
                                     });
@@ -1502,36 +1405,21 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                     });
                                 } else if !node.building_name.is_empty() {
                                     ui.horizontal(|ui| {
-                                        if !node.building_count_str.is_empty() {
+                                        if let Some(current_build) = node.building_count.as_mut() {
                                             let key = format!("building:{}", node.id);
-                                            let mut tmp = node.building_count_str.clone();
                                             let node_locked = self.ui_locked_nodes.contains(&node.id);
-                                            let r = self.render_fractional_input(
+                                            let reponse = self.render_fractional_input(
                                                 ui,
                                                 &key,
-                                                &mut tmp,
+                                                current_build,
                                                 center_field_width,
-                                                false || node_locked,
+                                                node_locked,
                                             );
-                                            // Commit building count edits on Enter (focused/hovered/typed-diff) or lost-focus+changed
-                                            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                            if enter_pressed || r.lost_focus() || r.changed() || r.has_focus() {
-                                                log::debug!("[UI][debug] key={} enter={} has_focus={} changed={} lost_focus={}", key, enter_pressed, r.has_focus(), r.changed(), r.lost_focus());
-                                            }
-                                            let buf_opt = self.edit_buffers.get(&key).cloned();
-                                            let displayed_str = node.building_count_str.clone();
-                                            let typed_differs = match &buf_opt {
-                                                Some(b) => b != &displayed_str,
-                                                None => false,
-                                            };
-                                            let submit = (enter_pressed && (r.has_focus() || r.hovered() || typed_differs)) || (r.lost_focus() && r.changed());
-                                            if submit {
-                                                if let Some(buf) = self.edit_buffers.get(&key) {
-                                                    self.pending_node_building_edits.push((node.id, buf.clone()));
-                                                    log::info!("[UI] queued building edit: node={} -> {}", node.id, buf);
-                                                } else {
-                                                    log::debug!("[UI][debug] edit_buffers missing for key {}", key);
-                                                }
+                                            
+                                            // If committed, push fractional building edit
+                                            if let Some(new_value) = reponse {
+                                                self.pending_node_building_edits.push((node.id, new_value));
+                                                log::info!("[UI] queued building edit: node={} -> {}", node.id, new_value.to_fraction_string());
                                             }
                                         }
                                         if !node.building_name.is_empty() {
@@ -1543,11 +1431,16 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                 }
 
                                 // Somersloop field (show only if building supports it and not a power generator)
-                                if !node.num_somersloop_str.is_empty()
+                                if node.num_somersloop.is_some()
                                     || node.somersloop_mult.map_or(false, |m| m.numerator() != 0)
                                 {
+                                    let last_underclock_ok = node
+                                        .last_underclock_power
+                                        .as_ref()
+                                        .map(|l| !l.to_float_string().starts_with("-"))
+                                        .unwrap_or(true);
                                     if node.somersloop_mult.map_or(false, |m| m.numerator() != 0)
-                                        && !node.last_underclock_power_str.starts_with("-")
+                                        && last_underclock_ok
                                     {
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
@@ -1589,9 +1482,9 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                                         .size()
                                                         .x
                                                         + 8.0;
-                                                    let key =
-                                                        format!("node:{}:somersloop", node.id);
-                                                    let mut tmp = node.num_somersloop_str.clone();
+                                                    let key = format!("node:{}:somersloop", node.id);
+                                                    // TODO add somesloops in core
+                                                    let mut current_somersloop = node.num_somersloop.unwrap().clone();
                                                     let is_locked = node
                                                         .input_locked
                                                         .get(0)
@@ -1606,19 +1499,13 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                                     let resp = self.render_fractional_input(
                                                         ui,
                                                         &key,
-                                                        &mut tmp,
+                                                        &mut current_somersloop,
                                                         somersloop_width,
                                                         is_locked || node_locked,
                                                     );
 
-                                                    if resp.lost_focus() && resp.changed() {
-                                                        // Commit somersloop edit from the internal buffer (render_fractional_input stores it)
-                                                        if let Some(buf) =
-                                                            self.edit_buffers.get(&key)
-                                                        {
-                                                            self.pending_node_somersloop_edits
-                                                                .push((node.id, buf.clone()));
-                                                        }
+                                                    if let Some(new_value) = resp {
+                                                        self.pending_node_somersloop_edits.push((node.id, new_value));
                                                     }
                                                 });
                                             },
@@ -1649,7 +1536,7 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                 ui.end_row();
                             });
                     });
-                } else if !node.sink_points_str.is_empty() {
+                } else if node.sink_points.is_some() {
                     // Sink node: show a '+' in the left column above the points row, then show points and tooltip with fraction
                     // Render '+' above points in middle column, using shared helper for consistent alignment
                     self.render_footer_add_button_middle(ui, &node, PinDirection::Input);
@@ -1675,7 +1562,7 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
                                 });
                             } else {
                                 ui.horizontal(|ui| {
-                                    let mut points_str = node.sink_points_str.clone();
+                                    let mut points_str = node.sink_points.clone().map(|p| p.to_float_string()).unwrap_or_default();
                                     // magic number
                                     let text_edit = egui::TextEdit::singleline(&mut points_str)
                                         .desired_width(44.0);
@@ -1694,9 +1581,9 @@ impl egui_snarl::ui::SnarlViewer<EditorNode> for SnarlViewer {
 
                 // If footer didn't contain other content (power/building/sink), show a fallback centered area
                 if node.building_name.is_empty()
-                    && node.same_clock_power_str.is_empty()
-                    && node.last_underclock_power_str.is_empty()
-                    && node.sink_points_str.is_empty()
+                    && node.same_clock_power.is_none()
+                    && node.last_underclock_power.is_none()
+                    && node.sink_points.is_none()
                 {
                     if node.node_type == NodeType::Merger
                         || node.node_type == NodeType::CustomSplitter
@@ -2325,6 +2212,16 @@ impl TemplateApp {
             .get_node_pin_rates(node_id)
             .unwrap_or((Vec::new(), Vec::new()));
 
+        // Parse rates from strings into FractionalNumber options
+        let input_rates_parsed: Vec<Option<crate::fractional_number::FractionalNumber>> = input_rates
+            .iter()
+            .map(|opt| opt.as_ref().and_then(|s| crate::fractional_number::FractionalNumber::from_string(s).ok()))
+            .collect();
+        let output_rates_parsed: Vec<Option<crate::fractional_number::FractionalNumber>> = output_rates
+            .iter()
+            .map(|opt| opt.as_ref().and_then(|s| crate::fractional_number::FractionalNumber::from_string(s).ok()))
+            .collect();
+
         // Fetch building info from production model
         let (building_count_str, building_name) = self
             .production_app
@@ -2349,20 +2246,37 @@ impl TemplateApp {
             node_type,
             input_names,
             input_icons,
-            input_rates,
+            input_rates_parsed,
             input_locked_flags,
             output_names,
             output_icons,
-            output_rates,
+            output_rates_parsed,
             output_locked_flags,
         );
 
-        editor_node.building_count_str = building_count_str;
+        // Parse building/power/somersloop string values into FractionalNumber options
+        editor_node.building_count = if building_count_str.is_empty() {
+            None
+        } else {
+            crate::fractional_number::FractionalNumber::from_string(&building_count_str).ok()
+        };
         editor_node.building_name = building_name;
-        editor_node.same_clock_power_str = same_clock_power_str;
-        editor_node.last_underclock_power_str = last_underclock_power_str;
+        editor_node.same_clock_power = if same_clock_power_str.is_empty() {
+            None
+        } else {
+            crate::fractional_number::FractionalNumber::from_string(&same_clock_power_str).ok()
+        };
+        editor_node.last_underclock_power = if last_underclock_power_str.is_empty() {
+            None
+        } else {
+            crate::fractional_number::FractionalNumber::from_string(&last_underclock_power_str).ok()
+        };
         editor_node.variable_power = variable_power;
-        editor_node.num_somersloop_str = num_somersloop_str;
+        editor_node.num_somersloop = if num_somersloop_str.is_empty() {
+            None
+        } else {
+            crate::fractional_number::FractionalNumber::from_string(&num_somersloop_str).ok()
+        };
         editor_node.somersloop_mult = somersloop_mult;
         // Map special somersloop icon from cache (if present)
         editor_node.somersloop_icon = self.item_icon_cache.get("Somersloop").map(|h| h.id());
@@ -2384,19 +2298,17 @@ impl TemplateApp {
                 .iter()
                 .zip(editor_node.input_rates.iter())
             {
-                if let (Some(name), Some(rate_str)) = (opt_name.as_ref(), opt_rate.as_ref()) {
-                    if let Ok(r) = crate::fractional_number::FractionalNumber::from_string(rate_str)
-                    {
-                        if let Some(item_rc) = self.game_data.items.get(name) {
-                            let pts = r * crate::fractional_number::FractionalNumber::from(
-                                item_rc.sink_value as i64,
-                            );
-                            sum += pts;
-                        }
+                if let (Some(name), Some(rate_f)) = (opt_name.as_ref(), opt_rate.as_ref()) {
+                    let r = rate_f.clone();
+                    if let Some(item_rc) = self.game_data.items.get(name) {
+                        let pts = r * crate::fractional_number::FractionalNumber::from(
+                            item_rc.sink_value as i64,
+                        );
+                        sum += pts;
                     }
                 }
             }
-            editor_node.sink_points_str = sum.to_float_string();
+            editor_node.sink_points = Some(sum.clone());
             editor_node.sink_points_fraction_str = sum.to_fraction_string();
         }
 
@@ -2511,8 +2423,7 @@ impl TemplateApp {
             }
         }
     }
-
-    }
+}
 
 impl eframe::App for TemplateApp {
     /// Called by the framework to save state before shutdown.
@@ -3134,107 +3045,104 @@ impl TemplateApp {
             let mut nodes_to_refresh: Vec<u64> = Vec::new();
 
             // Process pending pin rate edits collected by the SnarlViewer during rendering
-            for (node_id, dir, idx, text) in self.snarl_viewer.drain_pending_edits() {
-                match crate::fractional_number::FractionalNumber::from_string(&text) {
-                    Ok(f) => {
-                        if crate::rate_calculator::validate_rate(&f) {
-                            log::info!("[UI] processing pending edit: node={} dir={:?} idx={} parsed={}", node_id, dir, idx, f.to_fraction_string());
-                            match self.production_app.set_pin_rate(node_id, dir, idx, f) {
-                                Ok(()) => {
-                                    // Success feedback and refresh affected nodes (the node itself and direct neighbors)
-                                    self.emit_message("Updated pin rate", log::Level::Info);
-                                    nodes_to_refresh.push(node_id);
-                                    // Mark pin success (inline UI indicator)
-                                    self.snarl_viewer.mark_pin_success(node_id, dir, idx);
+            for (node_id, dir, idx, f) in self.snarl_viewer.drain_pending_edits() {
+                if crate::rate_calculator::validate_rate(&f) {
+                    log::info!("[UI] processing pending edit: node={} dir={:?} idx={} parsed={}", node_id, dir, idx, f.to_fraction_string());
+                    match self.production_app.set_pin_rate(node_id, dir, idx, f) {
+                        Ok(()) => {
+                            // Success feedback and refresh affected nodes (the node itself and direct neighbors)
+                            self.emit_message("Updated pin rate", log::Level::Info);
+                            nodes_to_refresh.push(node_id);
+                            // Mark pin success (inline UI indicator)
+                            self.snarl_viewer.mark_pin_success(node_id, dir, idx);
 
-                                    // Immediately update the snarl node display for this node so the user sees the change
-                                    if let Some((ins, outs)) = self.production_app.get_node_pin_rates(node_id) {
-                                        for node_info in self.snarl.nodes_info_mut() {
-                                            if node_info.value.id == node_id {
-                                                node_info.value.input_rates = ins.clone();
-                                                node_info.value.output_rates = outs.clone();
-                                                node_info.value.input_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(ins_locked,_)| ins_locked).unwrap_or(Vec::new());
-                                                node_info.value.output_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(_,outs_locked)| outs_locked).unwrap_or(Vec::new());
+                            // Immediately update the snarl node display for this node so the user sees the change
+                            if let Some((ins, outs)) = self.production_app.get_node_pin_rates(node_id) {
+                                for node_info in self.snarl.nodes_info_mut() {
+                                    if node_info.value.id == node_id {
+                                        // Convert string rates returned by production_app into FractionalNumber options
+                                        node_info.value.input_rates = ins.iter().map(|opt| opt.as_ref().and_then(|s| crate::fractional_number::FractionalNumber::from_string(s).ok())).collect();
+                                        node_info.value.output_rates = outs.iter().map(|opt| opt.as_ref().and_then(|s| crate::fractional_number::FractionalNumber::from_string(s).ok())).collect();
+                                        node_info.value.input_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(ins_locked,_)| ins_locked).unwrap_or(Vec::new());
+                                        node_info.value.output_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(_,outs_locked)| outs_locked).unwrap_or(Vec::new());
 
-                                                // Also update building count and power info immediately so UI reflects changes without a full rebuild
-                                                if let Some((count_str, _)) = self.production_app.get_node_building_info(node_id) {
-                                                    node_info.value.building_count_str = count_str.clone();
-                                                    // Update edit buffer so the footer input shows the new value immediately
-                                                    self.snarl_viewer.edit_buffers.insert(format!("building:{}", node_id), count_str);
-                                                }
-                                                if let Some((same, last, variable)) = self.production_app.get_node_power_info(node_id) {
-                                                    node_info.value.same_clock_power_str = same.clone();
-                                                    node_info.value.last_underclock_power_str = last.clone();
-                                                    node_info.value.variable_power = variable;
-                                                    // Update displayed power buffer based on current viewer mode
-                                                    let power_display = if self.snarl_viewer.power_equal_clocks { same } else { last };
-                                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:power", node_id), power_display);
-                                                }
-                                                if let Some((num_str, somersloop_mult)) = self.production_app.get_node_somersloop_info(node_id) {
-                                                    node_info.value.num_somersloop_str = num_str.clone();
-                                                    node_info.value.somersloop_mult = somersloop_mult;
-                                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:somersloop", node_id), num_str);
-                                                }
+                                        // Also update building count and power info immediately so UI reflects changes without a full rebuild
+                                        if let Some((count_str, _)) = self.production_app.get_node_building_info(node_id) {
+                                            let count_opt = if count_str.is_empty() { None } else { crate::fractional_number::FractionalNumber::from_string(&count_str).ok() };
+                                            node_info.value.building_count = count_opt.clone();
+                                            // Update edit buffer so the footer input shows the new value immediately
+                                            if let Some(ref c) = count_opt { self.snarl_viewer.edit_buffers.insert(format!("building:{}", node_id), c.to_float_string()); } else { self.snarl_viewer.edit_buffers.remove(&format!("building:{}", node_id)); }
+                                        }
+                                        if let Some((same, last, variable)) = self.production_app.get_node_power_info(node_id) {
+                                            let same_opt = if same.is_empty() { None } else { crate::fractional_number::FractionalNumber::from_string(&same).ok() };
+                                            let last_opt = if last.is_empty() { None } else { crate::fractional_number::FractionalNumber::from_string(&last).ok() };
+                                            node_info.value.same_clock_power = same_opt.clone();
+                                            node_info.value.last_underclock_power = last_opt.clone();
+                                            node_info.value.variable_power = variable;
+                                            // Update displayed power buffer based on current viewer mode
+                                            let power_display_str = if self.snarl_viewer.power_equal_clocks { same_opt.as_ref().map(|f| f.to_float_string()).unwrap_or_default() } else { last_opt.as_ref().map(|f| f.to_float_string()).unwrap_or_default() };
+                                            self.snarl_viewer.edit_buffers.insert(format!("node:{}:power", node_id), power_display_str);
+                                        }
+                                        if let Some((num_str, somersloop_mult)) = self.production_app.get_node_somersloop_info(node_id) {
+                                            let num_opt = if num_str.is_empty() { None } else { crate::fractional_number::FractionalNumber::from_string(&num_str).ok() };
+                                            node_info.value.num_somersloop = num_opt.clone();
+                                            node_info.value.somersloop_mult = somersloop_mult;
+                                            if let Some(ref c) = num_opt { self.snarl_viewer.edit_buffers.insert(format!("node:{}:somersloop", node_id), c.to_float_string()); } else { self.snarl_viewer.edit_buffers.remove(&format!("node:{}:somersloop", node_id)); }
+                                        }
 
-                                                // If this is a sink node, recompute sink points for display
-                                                if node_info.value.node_type == NodeType::Sink {
-                                                    let mut sum = crate::fractional_number::FractionalNumber::default();
-                                                    for (opt_name, opt_rate) in node_info.value.input_names.iter().zip(node_info.value.input_rates.iter()) {
-                                                        if let (Some(name), Some(rate_str)) = (opt_name.as_ref(), opt_rate.as_ref()) {
-                                                            if let Ok(r) = crate::fractional_number::FractionalNumber::from_string(rate_str) {
-                                                                if let Some(item_rc) = self.game_data.items.get(name) {
-                                                                    let pts = r * crate::fractional_number::FractionalNumber::from(item_rc.sink_value as i64);
-                                                                    sum += pts;
-                                                                }
-                                                            }
-                                                        }
+                                        // If this is a sink node, recompute sink points for display
+                                        if node_info.value.node_type == NodeType::Sink {
+                                            let mut sum = crate::fractional_number::FractionalNumber::default();
+                                            for (opt_name, opt_rate) in node_info.value.input_names.iter().zip(node_info.value.input_rates.iter()) {
+                                                if let (Some(name), Some(rate_f)) = (opt_name.as_ref(), opt_rate.as_ref()) {
+                                                    let r = rate_f.clone();
+                                                    if let Some(item_rc) = self.game_data.items.get(name) {
+                                                        let pts = r * crate::fractional_number::FractionalNumber::from(item_rc.sink_value as i64);
+                                                        sum += pts;
                                                     }
-                                                    node_info.value.sink_points_str = sum.to_float_string();
-                                                    node_info.value.sink_points_fraction_str = sum.to_fraction_string();
-                                                }
-
-                                                break;
-                                            }
-                                        }
-                                    }
-
-                                    // Expand refresh set to all nodes in the connected component of this node
-                                    use std::collections::HashSet;
-                                    let mut connected: HashSet<u64> = HashSet::new();
-                                    connected.insert(node_id);
-                                    let mut changed = true;
-                                    while changed {
-                                        changed = false;
-                                        for link in &self.production_app.links {
-                                            let start_node = self.production_app.find_pin_location(link.start_pin_id).map(|(n,_,_)| n);
-                                            let end_node = self.production_app.find_pin_location(link.end_pin_id).map(|(n,_,_)| n);
-                                            if let (Some(s), Some(e)) = (start_node, end_node) {
-                                                if connected.contains(&s) && !connected.contains(&e) {
-                                                    connected.insert(e);
-                                                    changed = true;
-                                                }
-                                                if connected.contains(&e) && !connected.contains(&s) {
-                                                    connected.insert(s);
-                                                    changed = true;
                                                 }
                                             }
+                                            node_info.value.sink_points = Some(sum.clone());
+                                            node_info.value.sink_points_fraction_str = sum.to_fraction_string();
                                         }
+
+                                        break;
                                     }
-                                    for n in connected {
-                                        nodes_to_refresh.push(n);
-                                    }
-                                }
-                                Err(e) => {
-                                    self.emit_message(format!("Error: {}", e), log::Level::Error);
                                 }
                             }
-                        } else {
-                            self.emit_message("Invalid rate (negative)", log::Level::Warn);
+
+                            // Expand refresh set to all nodes in the connected component of this node
+                            use std::collections::HashSet;
+                            let mut connected: HashSet<u64> = HashSet::new();
+                            connected.insert(node_id);
+                            let mut changed = true;
+                            while changed {
+                                changed = false;
+                                for link in &self.production_app.links {
+                                    let start_node = self.production_app.find_pin_location(link.start_pin_id).map(|(n,_,_)| n);
+                                    let end_node = self.production_app.find_pin_location(link.end_pin_id).map(|(n,_,_)| n);
+                                    if let (Some(s), Some(e)) = (start_node, end_node) {
+                                        if connected.contains(&s) && !connected.contains(&e) {
+                                            connected.insert(e);
+                                            changed = true;
+                                        }
+                                        if connected.contains(&e) && !connected.contains(&s) {
+                                            connected.insert(s);
+                                            changed = true;
+                                        }
+                                    }
+                                }
+                            }
+                            for n in connected {
+                                nodes_to_refresh.push(n);
+                            }
+                        }
+                        Err(e) => {
+                            self.emit_message(format!("Error: {}", e), log::Level::Error);
                         }
                     }
-                    Err(_) => {
-                        self.emit_message("Invalid rate format", log::Level::Warn);
-                    }
+                } else {
+                    self.emit_message("Invalid rate (negative)", log::Level::Warn);
                 }
             }
 
@@ -3409,97 +3317,85 @@ impl TemplateApp {
 
 
             // Process somersloop edits collected by the SnarlViewer
-            for (node_id, text) in self.snarl_viewer.drain_pending_somersloop_edits() {
-                match crate::fractional_number::FractionalNumber::from_string(&text) {
-                    Ok(f) => {
-                        // Only accept non-negative integers. Use ProductionApp to apply and validate cap
-                        match self.production_app.set_node_somersloop(node_id, f) {
-                            Ok(()) => {
-                                // refresh node so UI shows updated somersloop multiplier
-                                nodes_to_refresh.push(node_id);
-                            }
-                            Err(e) => {
-                                self.emit_message(format!("Error: {}", e), log::Level::Error);
-                            }
-                        }
+            for (node_id, f) in self.snarl_viewer.drain_pending_somersloop_edits() {
+                match self.production_app.set_node_somersloop(node_id, f.clone()) {
+                    Ok(()) => {
+                        // refresh node so UI shows updated somersloop multiplier
+                        nodes_to_refresh.push(node_id);
                     }
-                    Err(_) => {
-                        self.emit_message("Invalid somersloop format", log::Level::Warn);
+                    Err(e) => {
+                        self.emit_message(format!("Error: {}", e), log::Level::Error);
                     }
                 }
             }
 
             // Process building count edits collected by the SnarlViewer
-            for (node_id, text) in self.snarl_viewer.drain_pending_building_edits() {
-                match crate::fractional_number::FractionalNumber::from_string(&text) {
-                    Ok(f) => {
-                        if crate::rate_calculator::validate_rate(&f) {
-                            log::info!("[UI] processing pending building edit: node={} parsed={}", node_id, f.to_fraction_string());
-                            match self.production_app.set_node_building_count(node_id, f) {
-                                Ok(()) => {
-                                    self.emit_message("Updated building count", log::Level::Info);
-                                    nodes_to_refresh.push(node_id);
+            for (node_id, f) in self.snarl_viewer.drain_pending_building_edits() {
+                if crate::rate_calculator::validate_rate(&f) {
+                    log::info!("[UI] processing pending building edit: node={} parsed={}", node_id, f.to_fraction_string());
+                    match self.production_app.set_node_building_count(node_id, f.clone()) {
+                        Ok(()) => {
+                            self.emit_message("Updated building count", log::Level::Info);
+                            nodes_to_refresh.push(node_id);
 
-                                    // Immediately update the snarl node display for this node so the user sees the change
-                                    if let Some((ins, outs)) = self.production_app.get_node_pin_rates(node_id) {
-                                        for node_info in self.snarl.nodes_info_mut() {
-                                            if node_info.value.id == node_id {
-                                                node_info.value.input_rates = ins.clone();
-                                                node_info.value.output_rates = outs.clone();
-                                                node_info.value.input_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(ins_locked,_)| ins_locked).unwrap_or(Vec::new());
-                                                node_info.value.output_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(_,outs_locked)| outs_locked).unwrap_or(Vec::new());
+                            // Immediately update the snarl node display for this node so the user sees the change
+                            if let Some((ins, outs)) = self.production_app.get_node_pin_rates(node_id) {
+                                for node_info in self.snarl.nodes_info_mut() {
+                                    if node_info.value.id == node_id {
+                                        // Convert rates strings into FractionalNumber options
+                                        node_info.value.input_rates = ins.iter().map(|opt| opt.as_ref().and_then(|s| crate::fractional_number::FractionalNumber::from_string(s).ok())).collect();
+                                        node_info.value.output_rates = outs.iter().map(|opt| opt.as_ref().and_then(|s| crate::fractional_number::FractionalNumber::from_string(s).ok())).collect();
+                                        node_info.value.input_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(ins_locked,_)| ins_locked).unwrap_or(Vec::new());
+                                        node_info.value.output_locked = self.production_app.get_node_pin_locked_flags(node_id).map(|(_,outs_locked)| outs_locked).unwrap_or(Vec::new());
 
-                                                // Also update building count and power info immediately so UI reflects changes without a full rebuild
-                                                if let Some((count_str, _)) = self.production_app.get_node_building_info(node_id) {
-                                                    node_info.value.building_count_str = count_str.clone();
-                                                    self.snarl_viewer.edit_buffers.insert(format!("building:{}", node_id), count_str);
-                                                }
-                                                if let Some((same, last, variable)) = self.production_app.get_node_power_info(node_id) {
-                                                    node_info.value.same_clock_power_str = same.clone();
-                                                    node_info.value.last_underclock_power_str = last.clone();
-                                                    node_info.value.variable_power = variable;
-                                                    let power_display = if self.snarl_viewer.power_equal_clocks { same } else { last };
-                                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:power", node_id), power_display);
-                                                }
-                                                if let Some((num_str, somersloop_mult)) = self.production_app.get_node_somersloop_info(node_id) {
-                                                    node_info.value.num_somersloop_str = num_str.clone();
-                                                    node_info.value.somersloop_mult = somersloop_mult;
-                                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:somersloop", node_id), num_str);
-                                                }
-
-                                                // If this is a sink node, recompute sink points for display
-                                                if node_info.value.node_type == NodeType::Sink {
-                                                    let mut sum = crate::fractional_number::FractionalNumber::default();
-                                                    for (opt_name, opt_rate) in node_info.value.input_names.iter().zip(node_info.value.input_rates.iter()) {
-                                                        if let (Some(name), Some(rate_str)) = (opt_name.as_ref(), opt_rate.as_ref()) {
-                                                            if let Ok(r) = crate::fractional_number::FractionalNumber::from_string(rate_str) {
-                                                                if let Some(item_rc) = self.game_data.items.get(name) {
-                                                                    let pts = r * crate::fractional_number::FractionalNumber::from(item_rc.sink_value as i64);
-                                                                    sum += pts;
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    node_info.value.sink_points_str = sum.to_float_string();
-                                                    node_info.value.sink_points_fraction_str = sum.to_fraction_string();
-                                                }
-
-                                                break;
-                                            }
+                                        // Also update building count and power info immediately so UI reflects changes without a full rebuild
+                                        if let Some((count_str, _)) = self.production_app.get_node_building_info(node_id) {
+                                            let count_opt = if count_str.is_empty() { None } else { crate::fractional_number::FractionalNumber::from_string(&count_str).ok() };
+                                            node_info.value.building_count = count_opt.clone();
+                                            if let Some(ref c) = count_opt { self.snarl_viewer.edit_buffers.insert(format!("building:{}", node_id), c.to_float_string()); } else { self.snarl_viewer.edit_buffers.remove(&format!("building:{}", node_id)); }
                                         }
+                                        if let Some((same, last, variable)) = self.production_app.get_node_power_info(node_id) {
+                                            let same_opt = if same.is_empty() { None } else { crate::fractional_number::FractionalNumber::from_string(&same).ok() };
+                                            let last_opt = if last.is_empty() { None } else { crate::fractional_number::FractionalNumber::from_string(&last).ok() };
+                                            node_info.value.same_clock_power = same_opt.clone();
+                                            node_info.value.last_underclock_power = last_opt.clone();
+                                            node_info.value.variable_power = variable;
+                                            let power_display = if self.snarl_viewer.power_equal_clocks { same_opt.as_ref().map(|f| f.to_float_string()).unwrap_or_default() } else { last_opt.as_ref().map(|f| f.to_float_string()).unwrap_or_default() };
+                                            self.snarl_viewer.edit_buffers.insert(format!("node:{}:power", node_id), power_display);
+                                        }
+                                        if let Some((num_str, somersloop_mult)) = self.production_app.get_node_somersloop_info(node_id) {
+                                            let num_opt = if num_str.is_empty() { None } else { crate::fractional_number::FractionalNumber::from_string(&num_str).ok() };
+                                            node_info.value.num_somersloop = num_opt.clone();
+                                            node_info.value.somersloop_mult = somersloop_mult;
+                                            if let Some(ref c) = num_opt { self.snarl_viewer.edit_buffers.insert(format!("node:{}:somersloop", node_id), c.to_float_string()); } else { self.snarl_viewer.edit_buffers.remove(&format!("node:{}:somersloop", node_id)); }
+                                        }
+
+                                        // If this is a sink node, recompute sink points for display
+                                        if node_info.value.node_type == NodeType::Sink {
+                                            let mut sum = crate::fractional_number::FractionalNumber::default();
+                                            for (opt_name, opt_rate) in node_info.value.input_names.iter().zip(node_info.value.input_rates.iter()) {
+                                                if let (Some(name), Some(rate_f)) = (opt_name.as_ref(), opt_rate.as_ref()) {
+                                                    let r = rate_f.clone();
+                                                    if let Some(item_rc) = self.game_data.items.get(name) {
+                                                        let pts = r * crate::fractional_number::FractionalNumber::from(item_rc.sink_value as i64);
+                                                        sum += pts;
+                                                    }
+                                                }
+                                            }
+                                            node_info.value.sink_points = Some(sum.clone());
+                                        }
+
+                                        break;
                                     }
                                 }
-                                Err(e) => {
-                                    self.emit_message(format!("Error: {}", e), log::Level::Error);
-                                }
                             }
-                        } else {
-                            self.emit_message("Invalid rate (negative)", log::Level::Warn);
+                        }
+                        Err(e) => {
+                            self.emit_message(format!("Error: {}", e), log::Level::Error);
                         }
                     }
-                    Err(_) => {
-                        self.emit_message("Invalid rate format", log::Level::Warn);
-                    }
+                } else {
+                    self.emit_message("Invalid rate (negative)", log::Level::Warn);
                 }
             }
 
@@ -3696,15 +3592,15 @@ impl TemplateApp {
                             // Sync edit buffers so UI input/input fields reflect the new rates immediately
                             let en_ref = &node_info.value;
                             for (i, opt) in en_ref.input_rates.iter().enumerate() {
-                                if let Some(rate_str) = opt {
+                                if let Some(rate_f) = opt {
                                     let key = format!("pin:{}:in:{}", node_id, i);
-                                    self.snarl_viewer.edit_buffers.insert(key, rate_str.clone());
+                                    self.snarl_viewer.edit_buffers.insert(key, rate_f.to_float_string());
                                 }
                             }
                             for (i, opt) in en_ref.output_rates.iter().enumerate() {
-                                if let Some(rate_str) = opt {
+                                if let Some(rate_f) = opt {
                                     let key = format!("pin:{}:out:{}", node_id, i);
-                                    self.snarl_viewer.edit_buffers.insert(key, rate_str.clone());
+                                    self.snarl_viewer.edit_buffers.insert(key, rate_f.to_float_string());
                                 }
                             }
                             break;
@@ -3787,6 +3683,7 @@ impl TemplateApp {
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
