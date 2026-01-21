@@ -1,5 +1,5 @@
 use crate::building::Building;
-use crate::fractional_number::FractionalNumber;
+use crate::fractional_number::{self, FractionalNumber};
 use crate::recipe::{CountedItem, Item, Recipe};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -101,19 +101,45 @@ impl GameData {
                     recipe_obj.get("name").and_then(|v| v.as_str()),
                     recipe_obj.get("building").and_then(|v| v.as_str()),
                 ) {
+                    // Parse time and normalize quantities to items per minute (60 seconds)
+                    // Helper: parse a value that can be a string (fraction/expression), float or integer into FractionalNumber
+                    let parse_frac = |v: &Value| -> Option<FractionalNumber> {
+                        v.as_str()
+                            .and_then(|s| FractionalNumber::from_string(s).ok())
+                            .or_else(|| {
+                                v.as_f64().map(|n| {
+                                    FractionalNumber::from((n * 1000.0) as i64)
+                                        / FractionalNumber::from(1000)
+                                })
+                            })
+                            .or_else(|| v.as_i64().map(FractionalNumber::from))
+                    };
+
+                    let time = recipe_obj
+                        .get("time")
+                        .and_then(|v| parse_frac(v))
+                        .ok_or_else(|| format!("Failed to parse time for recipe {}", name))?;
+                    log::debug!("Parsed time for recipe {}: {:?}", name, time);
+
+                    let per_minute_scale = FractionalNumber::from(60) / time;
+
                     // Parse inputs
                     let mut inputs = Vec::new();
                     if let Some(inputs_array) = recipe_obj.get("inputs").and_then(|v| v.as_array())
                     {
                         for input_obj in inputs_array {
-                            if let (Some(item_name), Some(amount)) = (
-                                input_obj.get("name").and_then(|v| v.as_str()),
-                                input_obj.get("amount").and_then(|v| v.as_f64()),
-                            ) {
-                                if let Some(item) = self.items.get(item_name) {
-                                    let quantity = FractionalNumber::from((amount * 1000.0) as i64)
-                                        / FractionalNumber::from(1000);
-                                    inputs.push(CountedItem::new(item.clone(), quantity));
+                            if let Some(item_name) = input_obj.get("name").and_then(|v| v.as_str())
+                            {
+                                // amount can be a string (fraction/expression) or a number; use the same helper above
+                                let amount_opt =
+                                    input_obj.get("amount").and_then(|v| parse_frac(v));
+
+                                if let Some(amount) = amount_opt {
+                                    if let Some(item) = self.items.get(item_name) {
+                                        let base_quantity = amount;
+                                        let quantity = base_quantity * per_minute_scale;
+                                        inputs.push(CountedItem::new(item.clone(), quantity));
+                                    }
                                 }
                             }
                         }
@@ -125,14 +151,18 @@ impl GameData {
                         recipe_obj.get("outputs").and_then(|v| v.as_array())
                     {
                         for output_obj in outputs_array {
-                            if let (Some(item_name), Some(amount)) = (
-                                output_obj.get("name").and_then(|v| v.as_str()),
-                                output_obj.get("amount").and_then(|v| v.as_f64()),
-                            ) {
-                                if let Some(item) = self.items.get(item_name) {
-                                    let quantity = FractionalNumber::from((amount * 1000.0) as i64)
-                                        / FractionalNumber::from(1000);
-                                    outputs.push(CountedItem::new(item.clone(), quantity));
+                            if let Some(item_name) = output_obj.get("name").and_then(|v| v.as_str())
+                            {
+                                // amount can be a string (fraction/expression) or a number; use the same helper above
+                                let amount_opt =
+                                    output_obj.get("amount").and_then(|v| parse_frac(v));
+
+                                if let Some(amount) = amount_opt {
+                                    if let Some(item) = self.items.get(item_name) {
+                                        let base_quantity = amount;
+                                        let quantity = base_quantity * per_minute_scale;
+                                        outputs.push(CountedItem::new(item.clone(), quantity));
+                                    }
                                 }
                             }
                         }

@@ -183,4 +183,29 @@ fn smoke_test_game_data_parser() {
         iron_plate_recipe.outs[0].item.as_ref().unwrap().name,
         "Iron Plate"
     );
+
+    // Quantities should be normalized to items per minute (60 / time)
+    // Iron Plate: inputs 3 per 6s -> 30 per min; outputs 2 per 6s -> 20 per min
+    assert_eq!(iron_plate_recipe.ins[0].quantity.numerator(), 30);
+    assert_eq!(iron_plate_recipe.ins[0].quantity.denominator(), 1);
+    assert_eq!(iron_plate_recipe.outs[0].quantity.numerator(), 20);
+    assert_eq!(iron_plate_recipe.outs[0].quantity.denominator(), 1);
+
+    // Iron Rod: 1 per 4s -> 15 per min
+    let iron_rod_recipe = game_data
+        .recipes()
+        .iter()
+        .find(|r| r.name == "Iron Rod")
+        .expect("Iron Rod recipe not found");
+    assert_eq!(iron_rod_recipe.ins[0].quantity.numerator(), 15);
+    assert_eq!(iron_rod_recipe.outs[0].quantity.numerator(), 15);
+
+    // Iron Ingot (Smelter): 1 per 2s -> 30 per min
+    let iron_ingot_recipe = game_data
+        .recipes()
+        .iter()
+        .find(|r| r.name == "Iron Ingot")
+        .expect("Iron Ingot recipe not found");
+    assert_eq!(iron_ingot_recipe.ins[0].quantity.numerator(), 30);
+    assert_eq!(iron_ingot_recipe.outs[0].quantity.numerator(), 30);
 }

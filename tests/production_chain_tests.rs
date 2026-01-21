@@ -109,7 +109,8 @@ fn test_positions_preserved_on_save_reload() {
             Some(id) => id,
             None => continue,
         };
-        app.set_node_position(node_id, new_pos).expect("set position failed");
+        app.set_node_position(node_id, new_pos)
+            .expect("set position failed");
     }
 
     let saved = app.save_to_json().expect("Failed to save");
@@ -121,6 +122,48 @@ fn test_positions_preserved_on_save_reload() {
     for i in 0..app.node_count() {
         let p1 = app.get_node_position(i).expect("pos missing");
         let p2 = app2.get_node_position(i).expect("pos missing after reload");
-        assert_eq!(p1, p2, "Position mismatch at index {}: {:?} vs {:?}", i, p1, p2);
+        assert_eq!(
+            p1, p2,
+            "Position mismatch at index {}: {:?} vs {:?}",
+            i, p1, p2
+        );
     }
+}
+
+#[test]
+fn test_iron_ingot_node_rate() {
+    // Load file at runtime to avoid include_str path issues with spaces
+    let json = include_str!("../tests/production_chain.fcs");
+    let game_data = load_game_data();
+
+    let mut app = ProductionApp::new();
+    app.load_from_json(&json, Some(&game_data))
+        .expect("Failed to load production_chain copy.fcs");
+
+    // Find node id for the "Iron Ingot" craft node
+    let mut iron_node_id = None;
+    for i in 0..app.node_count() {
+        if let Some(node_id) = app.find_node_by_index(i) {
+            if let Some(label) = app.get_node_label(node_id) {
+                if label == "Iron Ingot" {
+                    iron_node_id = Some(node_id);
+                    break;
+                }
+            }
+        }
+    }
+
+    let node_id = iron_node_id.expect("Iron Ingot node not found");
+
+    // Get building info (current rate string and building name)
+    let (rate_str, _building) = app
+        .get_node_building_info(node_id)
+        .expect("Failed to get building info for Iron Ingot node");
+
+    // Prefer to check the underlying fractional rate (numerator/denominator)
+    let frac = app
+        .get_node_rate(node_id)
+        .expect("Failed to read fractional rate from node");
+    assert_eq!(frac.numerator(), 9, "Unexpected Iron Ingot numerator");
+    assert_eq!(frac.denominator(), 16, "Unexpected Iron Ingot denominator");
 }

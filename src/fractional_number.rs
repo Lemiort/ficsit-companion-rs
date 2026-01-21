@@ -143,14 +143,17 @@ impl FractionalNumber {
             {
                 // Parse number
                 if let Some(slash_pos) = token.find('/') {
-                    // It's a fraction
-                    let num = token[..slash_pos]
-                        .parse::<i64>()
-                        .map_err(|_| format!("Invalid numerator: {}", &token[..slash_pos]))?;
-                    let den = token[slash_pos + 1..]
-                        .parse::<i64>()
-                        .map_err(|_| format!("Invalid denominator: {}", &token[slash_pos + 1..]))?;
-                    values.push(FractionalNumber::new(num, den));
+                    // It's a fraction possibly containing decimals in numerator/denominator
+                    let num_str = &token[..slash_pos];
+                    let den_str = &token[slash_pos + 1..];
+                    let num_fn = FractionalNumber::from_string(num_str)
+                        .map_err(|_| format!("Invalid numerator: {}", num_str))?;
+                    let den_fn = FractionalNumber::from_string(den_str)
+                        .map_err(|_| format!("Invalid denominator: {}", den_str))?;
+                    if den_fn.is_zero() {
+                        return Err("Division by zero".to_string());
+                    }
+                    values.push(num_fn / den_fn);
                 } else if let Some(dot_pos) = token.find('.') {
                     // It's a decimal
                     let int_part = if dot_pos == 0 {
@@ -377,6 +380,15 @@ mod tests {
 
         let f = FractionalNumber::from_string("(1 + 2) * 3").unwrap();
         assert_eq!(f.numerator(), 9);
+        assert_eq!(f.denominator(), 1);
+    }
+
+    #[test]
+    fn test_parse_decimal_division() {
+        let f = FractionalNumber::from_string("300.0/75.000000").unwrap();
+        // 300 / 75 == 4
+        assert_eq!(f.value(), 4.0);
+        assert_eq!(f.numerator(), 4);
         assert_eq!(f.denominator(), 1);
     }
 
