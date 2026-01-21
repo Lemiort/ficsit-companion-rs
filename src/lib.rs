@@ -4,6 +4,7 @@ mod app;
 pub mod building;
 mod fractional_number;
 pub mod game_data;
+pub mod graph_node;
 pub mod link;
 pub mod node;
 pub mod pin;
@@ -15,4 +16,5 @@ pub mod utils;
 
 pub use app::TemplateApp;
 pub use fractional_number::FractionalNumber;
+pub use graph_node::{GraphNode, GraphNodeType, NodeDisplayData, PendingChange};
 pub use utils::{ItemCompare, RecipeCompare, update_save};

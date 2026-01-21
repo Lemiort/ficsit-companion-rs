@@ -104,6 +104,33 @@ impl ProductionApp {
         None
     }
 
+    /// Get the label/title for a node
+    /// - CraftNode: recipe_name
+    /// - OrganizerNode: kind-specific default (e.g., "Merger", "Splitter*", "Splitter")
+    /// - GroupNode: "Group"
+    /// - SinkNode: "Sink"
+    pub fn get_node_label(&self, node_id: u64) -> Option<String> {
+        let idx = self.find_node_index(node_id)?;
+        let node_any = &self.nodes[idx];
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            Some(n.recipe_name.clone())
+        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+            let label = match n.base.kind {
+                crate::node::NodeKind::Merger => "Merger",
+                crate::node::NodeKind::CustomSplitter => "Splitter*",
+                crate::node::NodeKind::GameSplitter => "Splitter",
+                _ => "Organizer",
+            };
+            Some(label.to_string())
+        } else if let Some(_n) = node_any.downcast_ref::<GroupNode>() {
+            Some("Group".to_string())
+        } else if let Some(_n) = node_any.downcast_ref::<SinkNode>() {
+            Some("Sink".to_string())
+        } else {
+            None
+        }
+    }
+
     /// Get pin item names for a node (inputs, outputs)
     pub fn get_node_pin_item_names(
         &self,
@@ -251,8 +278,8 @@ impl ProductionApp {
         let idx = self.find_node_index(node_id)?;
         let node_any = &self.nodes[idx];
         if let Some(n) = node_any.downcast_ref::<CraftNode>() {
-            // building_count_str is the current_rate formatted as a string
-            let count_str = n.current_rate.to_string();
+            // building_count_str is the current_rate formatted as a decimal string
+            let count_str = n.current_rate.to_float_string();
             let name = n.building_name.clone();
             return Some((count_str, name));
         }
@@ -335,6 +362,16 @@ impl ProductionApp {
             return Ok(());
         }
         Err("Node is not an organizer".into())
+    }
+
+    /// Get organizer node item name
+    pub fn get_node_item_name(&self, node_id: u64) -> Option<String> {
+        let idx = self.find_node_index(node_id)?;
+        let node_any = &self.nodes[idx];
+        if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+            return n.item_name.clone();
+        }
+        None
     }
 
     /// Set the current number of buildings for a craft node (node rate). This triggers propagation to connected graph.
