@@ -751,7 +751,14 @@ impl ProductionApp {
         let node_id = self.get_next_id();
         let mut splitter = OrganizerNode::new(node_id, NodeKind::GameSplitter, None);
 
-        // Create 1 input pin and 2 output pins
+        // For GameSplitter, we use one variable per node (like craft nodes).
+        // The rate propagation treats them as: pin_rate = var * base_rate
+        // For equal distribution with 2 outputs:
+        //   - Input base_rate = 1 (full flow)
+        //   - Each output base_rate = 1/num_outputs = 1/2 (equal split)
+        // Sum constraint: input = output1 + output2 → var * 1 = var * 0.5 + var * 0.5 ✓
+        let num_outputs = 2;
+        
         let in_pin_id = self.get_next_id();
         splitter.base.ins.push(Pin::new(
             in_pin_id,
@@ -759,10 +766,10 @@ impl ProductionApp {
             node_id,
             None,
             false,
-            FractionalNumber::default(),
+            FractionalNumber::new(1, 1),
         ));
 
-        for _ in 0..2 {
+        for _ in 0..num_outputs {
             let pin_id = self.get_next_id();
             splitter.base.outs.push(Pin::new(
                 pin_id,
@@ -770,7 +777,7 @@ impl ProductionApp {
                 node_id,
                 None,
                 false,
-                FractionalNumber::default(),
+                FractionalNumber::new(1, num_outputs as i64),
             ));
         }
 
