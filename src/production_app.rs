@@ -158,7 +158,7 @@ impl ProductionApp {
         None
     }
 
-    /// Get pin rates for a node (inputs, outputs) as float strings (e.g., "1.000")
+    /// Get pin rates for a node (inputs, outputs) as fraction strings (e.g., "9/16")
     pub fn get_node_pin_rates(
         &self,
         node_id: u64,
@@ -170,13 +170,13 @@ impl ProductionApp {
                 .base
                 .ins
                 .iter()
-                .map(|p| Some(p.current_rate.to_float_string()))
+                .map(|p| Some(p.current_rate.to_fraction_string()))
                 .collect();
             let outs = n
                 .base
                 .outs
                 .iter()
-                .map(|p| Some(p.current_rate.to_float_string()))
+                .map(|p| Some(p.current_rate.to_fraction_string()))
                 .collect();
             return Some((ins, outs));
         } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
@@ -184,13 +184,13 @@ impl ProductionApp {
                 .base
                 .ins
                 .iter()
-                .map(|p| Some(p.current_rate.to_float_string()))
+                .map(|p| Some(p.current_rate.to_fraction_string()))
                 .collect();
             let outs = n
                 .base
                 .outs
                 .iter()
-                .map(|p| Some(p.current_rate.to_float_string()))
+                .map(|p| Some(p.current_rate.to_fraction_string()))
                 .collect();
             return Some((ins, outs));
         } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
@@ -198,13 +198,13 @@ impl ProductionApp {
                 .base
                 .ins
                 .iter()
-                .map(|p| Some(p.current_rate.to_float_string()))
+                .map(|p| Some(p.current_rate.to_fraction_string()))
                 .collect();
             let outs = n
                 .base
                 .outs
                 .iter()
-                .map(|p| Some(p.current_rate.to_float_string()))
+                .map(|p| Some(p.current_rate.to_fraction_string()))
                 .collect();
             return Some((ins, outs));
         } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
@@ -212,7 +212,7 @@ impl ProductionApp {
                 .base
                 .ins
                 .iter()
-                .map(|p| Some(p.current_rate.to_float_string()))
+                .map(|p| Some(p.current_rate.to_fraction_string()))
                 .collect();
             let outs: Vec<Option<String>> = Vec::new();
             return Some((ins, outs));
@@ -278,8 +278,8 @@ impl ProductionApp {
         let idx = self.find_node_index(node_id)?;
         let node_any = &self.nodes[idx];
         if let Some(n) = node_any.downcast_ref::<CraftNode>() {
-            // building_count_str is the current_rate formatted as a decimal string
-            let count_str = n.current_rate.to_float_string();
+            // building_count_str is the current_rate formatted as a fraction string to preserve precision
+            let count_str = n.current_rate.to_fraction_string();
             let name = n.building_name.clone();
             return Some((count_str, name));
         }
@@ -292,8 +292,8 @@ impl ProductionApp {
         if let Some(n) = node_any.downcast_ref::<CraftNode>() {
             let (same, last) = n.compute_power_usage();
             return Some((
-                same.to_float_string(),
-                last.to_float_string(),
+                same.to_fraction_string(),
+                last.to_fraction_string(),
                 n.variable_power,
             ));
         }

@@ -401,4 +401,19 @@ mod tests {
         let g = FractionalNumber::new(5, 1);
         assert_eq!(g.to_fraction_string(), "5");
     }
+
+    #[test]
+    fn test_to_fraction_string() {
+        let f = FractionalNumber::new(9, 16);
+        assert_eq!(f.to_fraction_string(), "9/16");
+
+        let g = FractionalNumber::new(5, 1);
+        assert_eq!(g.to_fraction_string(), "5");
+    }
+
+    #[test]
+    fn test_from_fraction_string() {
+        let f = FractionalNumber::from_string("9/16").unwrap();
+        assert_eq!(f.to_fraction_string(), "9/16");
+    }
 }

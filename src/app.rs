@@ -2821,17 +2821,21 @@ impl TemplateApp {
 
                             // Update edit buffers immediately so UI reflects the change
                             // The cache will be rebuilt at the start of the next frame
+                            // Note: get_node_*_info returns fraction strings for precision, but edit buffers show decimals
                             if let Some((ins, outs)) = self.production_app.get_node_pin_rates(node_id) {
                                 for (i, opt) in ins.iter().enumerate() {
                                     if let Some(s) = opt {
                                         let key = format!("pin:{}:in:{}", node_id, i);
-                                        self.snarl_viewer.edit_buffers.insert(key, s.clone());
+                                        // Parse fraction string and convert to float string for display
+                                        let display_str = FractionalNumber::from_string(&s).map(|f| f.to_float_string()).unwrap_or(s.clone());
+                                        self.snarl_viewer.edit_buffers.insert(key, display_str);
                                     }
                                 }
                                 for (i, opt) in outs.iter().enumerate() {
                                     if let Some(s) = opt {
                                         let key = format!("pin:{}:out:{}", node_id, i);
-                                        self.snarl_viewer.edit_buffers.insert(key, s.clone());
+                                        let display_str = FractionalNumber::from_string(&s).map(|f| f.to_float_string()).unwrap_or(s.clone());
+                                        self.snarl_viewer.edit_buffers.insert(key, display_str);
                                     }
                                 }
                             }
@@ -2839,18 +2843,21 @@ impl TemplateApp {
                             // Also update building count and power edit buffers
                             if let Some((count_str, _)) = self.production_app.get_node_building_info(node_id) {
                                 if !count_str.is_empty() {
-                                    self.snarl_viewer.edit_buffers.insert(format!("building:{}", node_id), count_str);
+                                    let display_str = FractionalNumber::from_string(&count_str).map(|f| f.to_float_string()).unwrap_or(count_str);
+                                    self.snarl_viewer.edit_buffers.insert(format!("building:{}", node_id), display_str);
                                 } else {
                                     self.snarl_viewer.edit_buffers.remove(&format!("building:{}", node_id));
                                 }
                             }
                             if let Some((same, last, _variable)) = self.production_app.get_node_power_info(node_id) {
-                                let power_display_str = if self.snarl_viewer.power_equal_clocks { same } else { last };
+                                let power_str = if self.snarl_viewer.power_equal_clocks { same } else { last };
+                                let power_display_str = FractionalNumber::from_string(&power_str).map(|f| f.to_float_string()).unwrap_or(power_str);
                                 self.snarl_viewer.edit_buffers.insert(format!("node:{}:power", node_id), power_display_str);
                             }
                             if let Some((num_str, _somersloop_mult)) = self.production_app.get_node_somersloop_info(node_id) {
                                 if !num_str.is_empty() {
-                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:somersloop", node_id), num_str);
+                                    let display_str = FractionalNumber::from_string(&num_str).map(|f| f.to_float_string()).unwrap_or(num_str);
+                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:somersloop", node_id), display_str);
                                 } else {
                                     self.snarl_viewer.edit_buffers.remove(&format!("node:{}:somersloop", node_id));
                                 }
@@ -3075,30 +3082,35 @@ impl TemplateApp {
                                 for (i, opt) in ins.iter().enumerate() {
                                     if let Some(s) = opt {
                                         let key = format!("pin:{}:in:{}", node_id, i);
-                                        self.snarl_viewer.edit_buffers.insert(key, s.clone());
+                                        let display_str = FractionalNumber::from_string(&s).map(|f| f.to_float_string()).unwrap_or(s.clone());
+                                        self.snarl_viewer.edit_buffers.insert(key, display_str);
                                     }
                                 }
                                 for (i, opt) in outs.iter().enumerate() {
                                     if let Some(s) = opt {
                                         let key = format!("pin:{}:out:{}", node_id, i);
-                                        self.snarl_viewer.edit_buffers.insert(key, s.clone());
+                                        let display_str = FractionalNumber::from_string(&s).map(|f| f.to_float_string()).unwrap_or(s.clone());
+                                        self.snarl_viewer.edit_buffers.insert(key, display_str);
                                     }
                                 }
                             }
                             if let Some((count_str, _)) = self.production_app.get_node_building_info(node_id) {
                                 if !count_str.is_empty() {
-                                    self.snarl_viewer.edit_buffers.insert(format!("building:{}", node_id), count_str);
+                                    let display_str = FractionalNumber::from_string(&count_str).map(|f| f.to_float_string()).unwrap_or(count_str);
+                                    self.snarl_viewer.edit_buffers.insert(format!("building:{}", node_id), display_str);
                                 } else {
                                     self.snarl_viewer.edit_buffers.remove(&format!("building:{}", node_id));
                                 }
                             }
                             if let Some((same, last, _variable)) = self.production_app.get_node_power_info(node_id) {
-                                let power_display = if self.snarl_viewer.power_equal_clocks { same } else { last };
+                                let power_str = if self.snarl_viewer.power_equal_clocks { same } else { last };
+                                let power_display = FractionalNumber::from_string(&power_str).map(|f| f.to_float_string()).unwrap_or(power_str);
                                 self.snarl_viewer.edit_buffers.insert(format!("node:{}:power", node_id), power_display);
                             }
                             if let Some((num_str, _somersloop_mult)) = self.production_app.get_node_somersloop_info(node_id) {
                                 if !num_str.is_empty() {
-                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:somersloop", node_id), num_str);
+                                    let display_str = FractionalNumber::from_string(&num_str).map(|f| f.to_float_string()).unwrap_or(num_str);
+                                    self.snarl_viewer.edit_buffers.insert(format!("node:{}:somersloop", node_id), display_str);
                                 } else {
                                     self.snarl_viewer.edit_buffers.remove(&format!("node:{}:somersloop", node_id));
                                 }
@@ -3133,25 +3145,29 @@ impl TemplateApp {
                                     for (i, opt) in ins.iter().enumerate() {
                                         if let Some(s) = opt {
                                             let key = format!("pin:{}:in:{}", n, i);
-                                            self.snarl_viewer.edit_buffers.insert(key, s.clone());
+                                            let display_str = FractionalNumber::from_string(&s).map(|f| f.to_float_string()).unwrap_or(s.clone());
+                                            self.snarl_viewer.edit_buffers.insert(key, display_str);
                                         }
                                     }
                                     for (i, opt) in outs.iter().enumerate() {
                                         if let Some(s) = opt {
                                             let key = format!("pin:{}:out:{}", n, i);
-                                            self.snarl_viewer.edit_buffers.insert(key, s.clone());
+                                            let display_str = FractionalNumber::from_string(&s).map(|f| f.to_float_string()).unwrap_or(s.clone());
+                                            self.snarl_viewer.edit_buffers.insert(key, display_str);
                                         }
                                     }
                                 }
                                 if let Some((count_str, _)) = self.production_app.get_node_building_info(*n) {
                                     if !count_str.is_empty() {
-                                        self.snarl_viewer.edit_buffers.insert(format!("building:{}", n), count_str);
+                                        let display_str = FractionalNumber::from_string(&count_str).map(|f| f.to_float_string()).unwrap_or(count_str);
+                                        self.snarl_viewer.edit_buffers.insert(format!("building:{}", n), display_str);
                                     } else {
                                         self.snarl_viewer.edit_buffers.remove(&format!("building:{}", n));
                                     }
                                 }
                                 if let Some((same, last, _variable)) = self.production_app.get_node_power_info(*n) {
-                                    let power_display = if self.snarl_viewer.power_equal_clocks { same } else { last };
+                                    let power_str = if self.snarl_viewer.power_equal_clocks { same } else { last };
+                                    let power_display = FractionalNumber::from_string(&power_str).map(|f| f.to_float_string()).unwrap_or(power_str);
                                     self.snarl_viewer.edit_buffers.insert(format!("node:{}:power", n), power_display);
                                 }
                             }
