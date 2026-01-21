@@ -430,7 +430,7 @@ impl SnarlViewer {
         }
 
         // Show recipes (use cached list from TemplateApp)
-        let all_recipes: Vec<_> = self
+        let mut all_recipes: Vec<_> = self
             .recipes
             .iter()
             .map(|r| r.clone())
@@ -453,8 +453,16 @@ impl SnarlViewer {
                             .contains(&self.context_menu_recipe_filter.to_lowercase())
                 }
             })
-            .take(20)
             .collect();
+        // Sort recipes alphabetically (case-insensitive) by display name for predictable UI order
+        // Ignore a single leading '*' and any immediate whitespace when comparing
+        all_recipes.sort_by_key(|r| {
+            let mut s = r.display_name.clone();
+            if s.starts_with('*') {
+                s = s[1..].trim_start().to_string();
+            }
+            s
+        });
 
         if all_recipes.is_empty() && !self.recipes.is_empty() {
             ui.label("No matching recipes");
