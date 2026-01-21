@@ -914,33 +914,71 @@ impl ProductionApp {
 
         // Attempt guarded propagation on link creation: snapshot pin rates and lock states,
         // try to propagate, and if propagation fails restore the snapshot but keep the link.
-        let start_rate = {
-            if let Some((node_id, direction, pi)) = self.find_pin_location(start_pin_id) {
-                let ni = self.find_node_index(node_id).unwrap();
-                if let Some(n) = self.nodes[ni].downcast_ref::<CraftNode>() {
-                    match direction {
-                        PinDirection::Input => n.base.ins[pi].current_rate,
-                        PinDirection::Output => n.base.outs[pi].current_rate,
-                    }
-                } else if let Some(n) = self.nodes[ni].downcast_ref::<OrganizerNode>() {
-                    match direction {
-                        PinDirection::Input => n.base.ins[pi].current_rate,
-                        PinDirection::Output => n.base.outs[pi].current_rate,
-                    }
-                } else if let Some(n) = self.nodes[ni].downcast_ref::<GroupNode>() {
-                    match direction {
-                        PinDirection::Input => n.base.ins[pi].current_rate,
-                        PinDirection::Output => n.base.outs[pi].current_rate,
-                    }
-                } else if let Some(n) = self.nodes[ni].downcast_ref::<SinkNode>() {
-                    n.base.ins[pi].current_rate
-                } else {
-                    FractionalNumber::default()
+        //
+        // IMPORTANT: We need to find a locked pin in the connected graph to use as the constraint
+        // source. If we just use start_pin's rate (which may be 0), we'll get contradictions
+        // when connecting to a graph that already has locked pins with non-zero rates.
+        
+        // Helper to get a pin's (rate, locked) status
+        let get_pin_info = |this: &Self, pin_id: u64| -> Option<(FractionalNumber, bool)> {
+            if let Some((node_id, direction, pi)) = this.find_pin_location(pin_id) {
+                let ni = this.find_node_index(node_id)?;
+                let node_any = &this.nodes[ni];
+                if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                    let p = match direction {
+                        PinDirection::Input => &n.base.ins[pi],
+                        PinDirection::Output => &n.base.outs[pi],
+                    };
+                    return Some((p.current_rate, p.locked));
+                } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                    let p = match direction {
+                        PinDirection::Input => &n.base.ins[pi],
+                        PinDirection::Output => &n.base.outs[pi],
+                    };
+                    return Some((p.current_rate, p.locked));
+                } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                    let p = match direction {
+                        PinDirection::Input => &n.base.ins[pi],
+                        PinDirection::Output => &n.base.outs[pi],
+                    };
+                    return Some((p.current_rate, p.locked));
+                } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+                    let p = &n.base.ins[pi];
+                    return Some((p.current_rate, p.locked));
                 }
-            } else {
-                FractionalNumber::default()
             }
+            None
         };
+
+        // Find a locked pin in the connected graph starting from both endpoints
+        // The connected graph now includes both sides since we just created the link
+        let connected_pins = self.get_connected_pins(start_pin_id);
+        
+        // Look for any locked pin with a non-zero rate to use as constraint source
+        let mut constraint_pin_id = start_pin_id;
+        let mut constraint_value = get_pin_info(self, start_pin_id)
+            .map(|(r, _)| r)
+            .unwrap_or_default();
+        
+        for pid in &connected_pins {
+            if let Some((rate, locked)) = get_pin_info(self, *pid) {
+                if locked && !rate.is_zero() {
+                    constraint_pin_id = *pid;
+                    constraint_value = rate;
+                    break;
+                }
+            }
+        }
+        
+        // If no locked pin found, check if end_pin has a non-zero rate (prefer it over zero-rate start)
+        if constraint_value.is_zero() {
+            if let Some((rate, _)) = get_pin_info(self, end_pin_id) {
+                if !rate.is_zero() {
+                    constraint_pin_id = end_pin_id;
+                    constraint_value = rate;
+                }
+            }
+        }
 
         // Snapshot all pin rates and locks so we can restore if propagation fails
         let mut snapshot: std::collections::HashMap<u64, (FractionalNumber, bool)> = std::collections::HashMap::new();
@@ -965,7 +1003,7 @@ impl ProductionApp {
         }
 
         let mut propagate_warning: Option<String> = None;
-        if let Err(e) = self.update_nodes_rate(start_pin_id, start_rate) {
+        if let Err(e) = self.update_nodes_rate(constraint_pin_id, constraint_value) {
             // Restore snapshot (rates and locks) to avoid partial propagation state
             for (pid, (rate, locked)) in snapshot.into_iter() {
                 if let Some((node_id, direction, idx)) = self.find_pin_location(pid) {
