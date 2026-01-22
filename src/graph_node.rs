@@ -1,13 +1,14 @@
 //! Unified graph node type for the Snarl editor.
-//! 
+//!
 //! This module provides a `GraphNode` that stores just a node ID, and provides
 //! helper methods to access data from the ProductionApp. This eliminates the need
 //! for separate EditorNode copies and reduces data duplication.
 //!
 //! The GraphNode is essentially a lightweight handle that can be cloned freely.
-//! 
-//! `NodeDisplayData` is the per-frame cache that holds all display information
-//! for rendering. It's rebuilt from ProductionApp each frame before rendering.
+//!
+//! `NodeDisplayData` is the per-frame cache enum that holds all display information
+//! for rendering. Each variant contains only the fields relevant to that node type.
+//! It's rebuilt from ProductionApp each frame before rendering.
 
 use crate::fractional_number::FractionalNumber;
 use crate::node::NodeKind;
@@ -51,9 +52,12 @@ impl GraphNodeType {
             NodeKind::Group => GraphNodeType::Group,
         }
     }
-    
+
     pub fn is_organizer(&self) -> bool {
-        matches!(self, GraphNodeType::Merger | GraphNodeType::GameSplitter | GraphNodeType::CustomSplitter)
+        matches!(
+            self,
+            GraphNodeType::Merger | GraphNodeType::GameSplitter | GraphNodeType::CustomSplitter
+        )
     }
 }
 
@@ -70,20 +74,9 @@ impl std::fmt::Display for GraphNodeType {
     }
 }
 
-/// Per-frame display data cache for a node.
-/// This is rebuilt from ProductionApp each frame before rendering.
-/// It mirrors what C++ stores directly on nodes, but in Rust we keep
-/// ProductionApp as the single source of truth and rebuild this cache each frame.
-#[derive(Clone, Debug)]
-pub struct NodeDisplayData {
-    /// The production node ID
-    pub id: u64,
-    /// Display label
-    pub label: String,
-    /// Node type for UI decisions
-    pub node_type: GraphNodeType,
-
-    // Pin metadata for icons, labels, rates and locked state
+/// Common pin data shared by all node types
+#[derive(Clone, Debug, Default)]
+pub struct PinData {
     pub input_names: Vec<Option<String>>,
     pub input_icons: Vec<Option<egui::TextureId>>,
     pub input_rates: Vec<Option<FractionalNumber>>,
@@ -92,65 +85,285 @@ pub struct NodeDisplayData {
     pub output_icons: Vec<Option<egui::TextureId>>,
     pub output_rates: Vec<Option<FractionalNumber>>,
     pub output_locked: Vec<bool>,
+}
 
-    // Building info for craft nodes
-    pub building_count: Option<FractionalNumber>,
+/// Craft node specific data
+#[derive(Clone, Debug)]
+pub struct CraftData {
+    pub building_count: FractionalNumber,
     pub building_name: String,
-    pub same_clock_power: Option<FractionalNumber>,
-    pub last_underclock_power: Option<FractionalNumber>,
+    pub same_clock_power: FractionalNumber,
+    pub last_underclock_power: FractionalNumber,
     pub variable_power: bool,
-
-    // Somersloop info
-    pub num_somersloop: Option<FractionalNumber>,
-    pub somersloop_mult: Option<FractionalNumber>,
+    pub num_somersloop: FractionalNumber,
+    pub somersloop_mult: FractionalNumber,
     pub somersloop_icon: Option<egui::TextureId>,
+    pub is_power_generator: bool,
+    pub built: bool,
+}
 
-    // For group nodes: whether all contained craft nodes are built
-    pub group_built: Option<bool>,
+impl Default for CraftData {
+    fn default() -> Self {
+        Self {
+            building_count: FractionalNumber::default(),
+            building_name: String::new(),
+            same_clock_power: FractionalNumber::default(),
+            last_underclock_power: FractionalNumber::default(),
+            variable_power: false,
+            num_somersloop: FractionalNumber::default(),
+            somersloop_mult: FractionalNumber::default(),
+            somersloop_icon: None,
+            is_power_generator: false,
+            built: false,
+        }
+    }
+}
 
-    // For sink nodes: total sink points
-    pub sink_points: Option<FractionalNumber>,
-    pub sink_points_fraction_str: String,
-
-    // Optional item type for merger/splitter nodes
+/// Organizer (Merger/Splitter) node specific data
+#[derive(Clone, Debug, Default)]
+pub struct OrganizerData {
     pub item_type: Option<String>,
     pub item_type_icon: Option<egui::TextureId>,
 }
 
+/// Sink node specific data
+#[derive(Clone, Debug, Default)]
+pub struct SinkData {
+    pub sink_points: FractionalNumber,
+    pub sink_points_fraction_str: String,
+    pub item_type: Option<String>,
+    pub item_type_icon: Option<egui::TextureId>,
+}
+
+/// Group node specific data
+#[derive(Clone, Debug, Default)]
+pub struct GroupData {
+    pub is_built: bool,
+}
+
+/// Per-frame display data cache for a node.
+/// Each variant contains only the fields relevant to that node type.
+/// This is rebuilt from ProductionApp each frame before rendering.
+#[derive(Clone, Debug)]
+pub enum NodeDisplayData {
+    Craft {
+        id: u64,
+        label: String,
+        pins: PinData,
+        craft: CraftData,
+    },
+    Merger {
+        id: u64,
+        label: String,
+        pins: PinData,
+        organizer: OrganizerData,
+    },
+    GameSplitter {
+        id: u64,
+        label: String,
+        pins: PinData,
+        organizer: OrganizerData,
+    },
+    CustomSplitter {
+        id: u64,
+        label: String,
+        pins: PinData,
+        organizer: OrganizerData,
+    },
+    Sink {
+        id: u64,
+        label: String,
+        pins: PinData,
+        sink: SinkData,
+    },
+    Group {
+        id: u64,
+        label: String,
+        pins: PinData,
+        group: GroupData,
+    },
+}
+
 impl NodeDisplayData {
-    /// Create a new display data with just ID and type (pins empty)
-    pub fn new(id: u64, label: impl Into<String>, node_type: GraphNodeType) -> Self {
-        Self {
-            id,
-            label: label.into(),
-            node_type,
-            input_names: Vec::new(),
-            input_icons: Vec::new(),
-            input_rates: Vec::new(),
-            input_locked: Vec::new(),
-            output_names: Vec::new(),
-            output_icons: Vec::new(),
-            output_rates: Vec::new(),
-            output_locked: Vec::new(),
-            building_count: None,
-            building_name: String::new(),
-            same_clock_power: None,
-            last_underclock_power: None,
-            variable_power: false,
-            num_somersloop: None,
-            somersloop_mult: None,
-            somersloop_icon: None,
-            group_built: None,
-            sink_points: None,
-            sink_points_fraction_str: String::new(),
-            item_type: None,
-            item_type_icon: None,
+    /// Get the node ID
+    pub fn id(&self) -> u64 {
+        match self {
+            NodeDisplayData::Craft { id, .. } => *id,
+            NodeDisplayData::Merger { id, .. } => *id,
+            NodeDisplayData::GameSplitter { id, .. } => *id,
+            NodeDisplayData::CustomSplitter { id, .. } => *id,
+            NodeDisplayData::Sink { id, .. } => *id,
+            NodeDisplayData::Group { id, .. } => *id,
+        }
+    }
+
+    /// Get the display label
+    pub fn label(&self) -> &str {
+        match self {
+            NodeDisplayData::Craft { label, .. } => label,
+            NodeDisplayData::Merger { label, .. } => label,
+            NodeDisplayData::GameSplitter { label, .. } => label,
+            NodeDisplayData::CustomSplitter { label, .. } => label,
+            NodeDisplayData::Sink { label, .. } => label,
+            NodeDisplayData::Group { label, .. } => label,
+        }
+    }
+
+    /// Get the pin data
+    pub fn pins(&self) -> &PinData {
+        match self {
+            NodeDisplayData::Craft { pins, .. } => pins,
+            NodeDisplayData::Merger { pins, .. } => pins,
+            NodeDisplayData::GameSplitter { pins, .. } => pins,
+            NodeDisplayData::CustomSplitter { pins, .. } => pins,
+            NodeDisplayData::Sink { pins, .. } => pins,
+            NodeDisplayData::Group { pins, .. } => pins,
+        }
+    }
+
+    /// Get mutable pin data
+    pub fn pins_mut(&mut self) -> &mut PinData {
+        match self {
+            NodeDisplayData::Craft { pins, .. } => pins,
+            NodeDisplayData::Merger { pins, .. } => pins,
+            NodeDisplayData::GameSplitter { pins, .. } => pins,
+            NodeDisplayData::CustomSplitter { pins, .. } => pins,
+            NodeDisplayData::Sink { pins, .. } => pins,
+            NodeDisplayData::Group { pins, .. } => pins,
+        }
+    }
+
+    /// Get the node type
+    pub fn node_type(&self) -> GraphNodeType {
+        match self {
+            NodeDisplayData::Craft { .. } => GraphNodeType::Craft,
+            NodeDisplayData::Merger { .. } => GraphNodeType::Merger,
+            NodeDisplayData::GameSplitter { .. } => GraphNodeType::GameSplitter,
+            NodeDisplayData::CustomSplitter { .. } => GraphNodeType::CustomSplitter,
+            NodeDisplayData::Sink { .. } => GraphNodeType::Sink,
+            NodeDisplayData::Group { .. } => GraphNodeType::Group,
         }
     }
 
     /// Check if this is an organizer node (merger/splitter)
     pub fn is_organizer(&self) -> bool {
-        self.node_type.is_organizer()
+        matches!(
+            self,
+            NodeDisplayData::Merger { .. }
+                | NodeDisplayData::GameSplitter { .. }
+                | NodeDisplayData::CustomSplitter { .. }
+        )
+    }
+
+    /// Check if this is a splitter node
+    pub fn is_splitter(&self) -> bool {
+        matches!(
+            self,
+            NodeDisplayData::GameSplitter { .. } | NodeDisplayData::CustomSplitter { .. }
+        )
+    }
+
+    /// Get item type for organizer/sink nodes
+    pub fn item_type(&self) -> Option<&String> {
+        match self {
+            NodeDisplayData::Merger { organizer, .. } => organizer.item_type.as_ref(),
+            NodeDisplayData::GameSplitter { organizer, .. } => organizer.item_type.as_ref(),
+            NodeDisplayData::CustomSplitter { organizer, .. } => organizer.item_type.as_ref(),
+            NodeDisplayData::Sink { sink, .. } => sink.item_type.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Get item type icon for organizer/sink nodes
+    pub fn item_type_icon(&self) -> Option<egui::TextureId> {
+        match self {
+            NodeDisplayData::Merger { organizer, .. } => organizer.item_type_icon,
+            NodeDisplayData::GameSplitter { organizer, .. } => organizer.item_type_icon,
+            NodeDisplayData::CustomSplitter { organizer, .. } => organizer.item_type_icon,
+            NodeDisplayData::Sink { sink, .. } => sink.item_type_icon,
+            _ => None,
+        }
+    }
+
+    /// Get build progress status for Craft and Group nodes
+    pub fn built(&self) -> Option<bool> {
+        match self {
+            NodeDisplayData::Craft { craft, .. } => Some(craft.built),
+            NodeDisplayData::Group { group, .. } => Some(group.is_built),
+            _ => None,
+        }
+    }
+
+    /// Create a new Craft display data
+    pub fn new_craft(id: u64, label: impl Into<String>) -> Self {
+        NodeDisplayData::Craft {
+            id,
+            label: label.into(),
+            pins: PinData::default(),
+            craft: CraftData::default(),
+        }
+    }
+
+    /// Create a new Merger display data
+    pub fn new_merger(id: u64, label: impl Into<String>) -> Self {
+        NodeDisplayData::Merger {
+            id,
+            label: label.into(),
+            pins: PinData::default(),
+            organizer: OrganizerData::default(),
+        }
+    }
+
+    /// Create a new GameSplitter display data
+    pub fn new_game_splitter(id: u64, label: impl Into<String>) -> Self {
+        NodeDisplayData::GameSplitter {
+            id,
+            label: label.into(),
+            pins: PinData::default(),
+            organizer: OrganizerData::default(),
+        }
+    }
+
+    /// Create a new CustomSplitter display data
+    pub fn new_custom_splitter(id: u64, label: impl Into<String>) -> Self {
+        NodeDisplayData::CustomSplitter {
+            id,
+            label: label.into(),
+            pins: PinData::default(),
+            organizer: OrganizerData::default(),
+        }
+    }
+
+    /// Create a new Sink display data
+    pub fn new_sink(id: u64, label: impl Into<String>) -> Self {
+        NodeDisplayData::Sink {
+            id,
+            label: label.into(),
+            pins: PinData::default(),
+            sink: SinkData::default(),
+        }
+    }
+
+    /// Create a new Group display data
+    pub fn new_group(id: u64, label: impl Into<String>) -> Self {
+        NodeDisplayData::Group {
+            id,
+            label: label.into(),
+            pins: PinData::default(),
+            group: GroupData::default(),
+        }
+    }
+
+    /// Create a display data from node type
+    pub fn from_type(id: u64, label: impl Into<String>, node_type: GraphNodeType) -> Self {
+        match node_type {
+            GraphNodeType::Craft => Self::new_craft(id, label),
+            GraphNodeType::Merger => Self::new_merger(id, label),
+            GraphNodeType::GameSplitter => Self::new_game_splitter(id, label),
+            GraphNodeType::CustomSplitter => Self::new_custom_splitter(id, label),
+            GraphNodeType::Sink => Self::new_sink(id, label),
+            GraphNodeType::Group => Self::new_group(id, label),
+        }
     }
 }
 
@@ -175,10 +388,7 @@ pub enum PendingChange {
         value: FractionalNumber,
     },
     /// Node built state edit
-    NodeBuilt {
-        node_id: u64,
-        built: bool,
-    },
+    NodeBuilt { node_id: u64, built: bool },
     /// Add a pin to a node
     PinAdd {
         node_id: u64,
@@ -201,27 +411,38 @@ pub enum PendingChange {
         in_pin: egui_snarl::InPinId,
     },
     /// Node lock state change
-    NodeLock {
-        node_id: u64,
-        locked: bool,
-    },
+    NodeLock { node_id: u64, locked: bool },
     /// Node item type change (for organizers/sinks)
-    NodeItem {
-        node_id: u64,
-        item: Option<String>,
-    },
+    NodeItem { node_id: u64, item: Option<String> },
     /// Sink pin item type change (for individual sink input pins)
     SinkPinItem {
         node_id: u64,
         pin_idx: usize,
         item: Option<String>,
     },
+    /// Individual pin lock state change (for custom splitters/mergers)
+    PinLock {
+        node_id: u64,
+        direction: PinDirection,
+        pin_index: usize,
+        locked: bool,
+    },
 }
 
 impl PendingChange {
     /// Create a pin rate change
-    pub fn pin_rate(node_id: u64, direction: PinDirection, pin_index: usize, value: FractionalNumber) -> Self {
-        Self::PinRate { node_id, direction, pin_index, value }
+    pub fn pin_rate(
+        node_id: u64,
+        direction: PinDirection,
+        pin_index: usize,
+        value: FractionalNumber,
+    ) -> Self {
+        Self::PinRate {
+            node_id,
+            direction,
+            pin_index,
+            value,
+        }
     }
 
     /// Create a building count change
@@ -246,7 +467,11 @@ impl PendingChange {
 
     /// Create a pin remove change
     pub fn remove_pin(node_id: u64, direction: PinDirection, index: usize) -> Self {
-        Self::PinRemove { node_id, direction, index }
+        Self::PinRemove {
+            node_id,
+            direction,
+            index,
+        }
     }
 
     /// Create a connect change
@@ -267,5 +492,15 @@ impl PendingChange {
     /// Create an item type change
     pub fn item(node_id: u64, item: Option<String>) -> Self {
         Self::NodeItem { node_id, item }
+    }
+
+    /// Create a pin lock change
+    pub fn pin_lock(node_id: u64, direction: PinDirection, pin_index: usize, locked: bool) -> Self {
+        Self::PinLock {
+            node_id,
+            direction,
+            pin_index,
+            locked,
+        }
     }
 }
