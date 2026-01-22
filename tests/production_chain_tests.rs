@@ -1,6 +1,7 @@
 use ficsit_companion_rs::game_data::GameData;
 use ficsit_companion_rs::pin::PinDirection;
 use ficsit_companion_rs::production_app::ProductionApp;
+use ficsit_companion_rs::FractionalNumber;
 
 fn load_game_data() -> GameData {
     let json = include_str!("../assets/satisfactory.json");
@@ -163,6 +164,60 @@ fn test_iron_ingot_node_rate() {
 
     // Verify we got the rate string (should be non-empty)
     assert!(!rate_str.is_empty(), "Rate string should not be empty");
+}
+
+#[test]
+fn test_pin_rates_preserved_on_save_reload() {
+    let game_data = load_game_data();
+    let mut app = ProductionApp::new();
+
+    // Create a craft node and set its output pin rate to 10
+    let node_id = app
+        .add_craft_node("Encased Uranium Cell", &game_data)
+        .expect("Failed to create craft node");
+
+    // Ensure at least one output pin is present
+    let out_pin_id = app
+        .get_pin_id(node_id, PinDirection::Output, 0)
+        .expect("Failed to get craft output pin");
+
+    // Set output pin rate to 10 (this updates node rate and propagates)
+    app.set_pin_rate(node_id, PinDirection::Output, 0, FractionalNumber::new(10, 1))
+        .expect("Failed to set pin rate");
+
+    // Verify current rate before save
+    let (_ins, outs) = app
+        .get_node_pin_rates(node_id)
+        .expect("Failed to get pin rates");
+    let before = outs[0].as_ref().expect("Output rate should be Some");
+    assert!(before == "10" || before == "10/1", "Unexpected rate before save: {}", before);
+
+    // Save and reload
+    let saved = app.save_to_json().expect("Failed to save");
+    let mut app2 = ProductionApp::new();
+    app2.load_from_json(&saved, Some(&game_data))
+        .expect("Failed to reload");
+
+    // Find the same craft node by label in reloaded app
+    let mut reloaded_node_id = None;
+    for i in 0..app2.node_count() {
+        if let Some(node_id) = app2.find_node_by_index(i) {
+            if let Some(label) = app2.get_node_label(node_id) {
+                if label == "Encased Uranium Cell" {
+                    reloaded_node_id = Some(node_id);
+                    break;
+                }
+            }
+        }
+    }
+    let rnode = reloaded_node_id.expect("Reloaded craft node not found");
+
+    // Verify the output rate was preserved after reload
+    let (_rins, routs) = app2
+        .get_node_pin_rates(rnode)
+        .expect("Failed to get pin rates after reload");
+    let after = routs[0].as_ref().expect("Output rate should be Some after reload");
+    assert!(after == "10" || after == "10/1", "Rate not preserved after reload: {}", after);
 }
 
 #[test]

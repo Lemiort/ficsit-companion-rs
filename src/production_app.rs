@@ -2663,7 +2663,17 @@ impl ProductionApp {
         self.links.clear();
         self.next_id = 1;
 
-        // Load nodes
+        // Load nodes (record which nodes were saved as locked so we can restore after links exist)
+        let locked_node_indices: Vec<usize> = file
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| match n {
+                SerializedNode::Craft(c) if c.locked => Some(i),
+                _ => None,
+            })
+            .collect();
+
         for (idx, serialized_node) in file.nodes.iter().enumerate() {
             self.load_node(serialized_node, idx, game_data)?;
         }
@@ -2671,6 +2681,54 @@ impl ProductionApp {
         // Load links
         for serialized_link in &file.links {
             self.load_link(serialized_link)?;
+        }
+
+        // Apply node-level locks recorded in file now that links exist
+        for idx in locked_node_indices {
+            if let Some(node_any) = self.nodes.get(idx) {
+                if let Some(craft) = node_any.downcast_ref::<CraftNode>() {
+                    let node_id = craft.base.id;
+                    // Best-effort: ignore errors applying lock to be permissive for slightly malformed files
+                    let _ = self.set_node_locked(node_id, true);
+                }
+            }
+        }
+
+        // Collect all locked pins first (so we can call propagation mutably later)
+        let mut locked_pins: Vec<(u64, FractionalNumber)> = Vec::new();
+        for node_any in &self.nodes {
+            if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                    if p.locked {
+                        locked_pins.push((p.id, p.current_rate));
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                    if p.locked {
+                        locked_pins.push((p.id, p.current_rate));
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                    if p.locked {
+                        locked_pins.push((p.id, p.current_rate));
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+                for p in n.base.ins.iter() {
+                    if p.locked {
+                        locked_pins.push((p.id, p.current_rate));
+                    }
+                }
+            }
+        }
+
+        // Propagate for each locked pin (best-effort)
+        for (pid, rate) in locked_pins {
+            if let Err(e) = self.update_nodes_rate(pid, rate) {
+                log::debug!("[LOAD] propagation from pin {} failed: {}", pid, e);
+            }
         }
 
         Ok(())
@@ -2738,6 +2796,9 @@ impl ProductionApp {
                     }
                 }
 
+                // Update pin current rates based on node rate
+                node.update_rate(node.current_rate);
+
                 self.nodes.push(Box::new(node));
             }
             SerializedNode::Sink(sink) => {
@@ -2749,7 +2810,7 @@ impl ProductionApp {
                 for input in &sink.ins {
                     let pin_id = self.get_next_id();
                     let rate = FractionalNumber::new(input.num, input.den);
-                    let pin = Pin::new(
+                    let mut pin = Pin::new(
                         pin_id,
                         PinDirection::Input,
                         node_id,
@@ -2757,6 +2818,8 @@ impl ProductionApp {
                         input.locked,
                         rate,
                     );
+                    // Restore current rate to match saved rate
+                    pin.current_rate = rate;
                     node.base.ins.push(pin);
                 }
 
@@ -3021,7 +3084,7 @@ impl ProductionApp {
                     y: craft.base.position.1,
                 },
                 built: craft.built,
-                locked: false, // TODO: Track node-level lock
+                locked: craft.base.ins.iter().chain(craft.base.outs.iter()).all(|p| p.locked),
                 num_somersloop: craft.num_somersloop.numerator() as u8,
             }))
         } else if let Some(sink) = node_box.downcast_ref::<SinkNode>() {
