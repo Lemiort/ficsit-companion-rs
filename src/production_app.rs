@@ -2228,6 +2228,7 @@ impl ProductionApp {
             pin_to_var
         );
 
+
         // If there are no variables, just check locked consistency across links and still update touched nodes
         if pin_to_var.is_empty() {
             for link in &self.links {
@@ -2496,8 +2497,6 @@ impl ProductionApp {
             return Err("No equations to solve".into());
         }
 
-        log::debug!("[SOLVER] equations={:?}", equations);
-        log::debug!("[SOLVER] constants={:?}", constants);
 
         // Solve system
         let solver =
@@ -2674,14 +2673,35 @@ impl ProductionApp {
             })
             .collect();
 
+        // Collect any explicit organizer pin values present in the file (C++ exports may include them)
+        // We'll restore these after links/locks/propagation to preserve the author's saved values.
+        let mut organizer_saved_pins: Vec<(usize, bool, usize, crate::fractional_number::FractionalNumber, bool)> = Vec::new();
+        // Also save craft node rates so we can re-apply them after propagation (preserve visuals)
+        let mut craft_saved_rates: Vec<(usize, crate::fractional_number::FractionalNumber)> = Vec::new();
         for (idx, serialized_node) in file.nodes.iter().enumerate() {
+            if let SerializedNode::Organizer(org) = serialized_node {
+                if let Some(ins) = &org.ins {
+                    for (i, entry) in ins.iter().enumerate() {
+                        organizer_saved_pins.push((idx, true, i, FractionalNumber::new(entry.num, entry.den), entry.locked));
+                    }
+                }
+                if let Some(outs) = &org.outs {
+                    for (i, entry) in outs.iter().enumerate() {
+                        organizer_saved_pins.push((idx, false, i, FractionalNumber::new(entry.num, entry.den), entry.locked));
+                    }
+                }
+            } else if let SerializedNode::Craft(c) = serialized_node {
+                craft_saved_rates.push((idx, FractionalNumber::new(c.rate.num, c.rate.den)));
+            }
             self.load_node(serialized_node, idx, game_data)?;
         }
+
 
         // Load links
         for serialized_link in &file.links {
             self.load_link(serialized_link)?;
         }
+
 
         // Apply node-level locks recorded in file now that links exist
         for idx in locked_node_indices {
@@ -2693,6 +2713,56 @@ impl ProductionApp {
                 }
             }
         }
+
+
+        // Run auto-lock logic for organizer nodes so single-pin rates are derived when
+        // all multi-pins are locked (e.g., splitter outputs locked -> input computed).
+        // Repeat until stable to catch cascaded locks.
+        loop {
+            // Snapshot locked state to detect changes
+            let before_locked: Vec<u64> = self
+                .nodes
+                .iter()
+                .flat_map(|n| {
+                    if let Some(org) = n.downcast_ref::<OrganizerNode>() {
+                        org.base
+                            .ins
+                            .iter()
+                            .chain(org.base.outs.iter())
+                            .filter(|p| p.locked)
+                            .map(|p| p.id)
+                            .collect::<Vec<u64>>()
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect();
+
+            self.auto_lock_organizer_pins();
+
+            let after_locked: Vec<u64> = self
+                .nodes
+                .iter()
+                .flat_map(|n| {
+                    if let Some(org) = n.downcast_ref::<OrganizerNode>() {
+                        org.base
+                            .ins
+                            .iter()
+                            .chain(org.base.outs.iter())
+                            .filter(|p| p.locked)
+                            .map(|p| p.id)
+                            .collect::<Vec<u64>>()
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .collect();
+
+            if after_locked.len() == before_locked.len() {
+                break;
+            }
+        }
+
 
         // Collect all locked pins first (so we can call propagation mutably later)
         let mut locked_pins: Vec<(u64, FractionalNumber)> = Vec::new();
@@ -2724,10 +2794,48 @@ impl ProductionApp {
             }
         }
 
-        // Propagate for each locked pin (best-effort)
+
+        // Propagate from locked pins (call propagation for each pinned constraint).
+        // Previously we de-duplicated per connected component to reduce redundant solves,
+        // but that can inadvertently create large mixed systems. Calling per-pin keeps
+        // behavior consistent with prior logic and fixes correctness for some C++ exports.
         for (pid, rate) in locked_pins {
+
             if let Err(e) = self.update_nodes_rate(pid, rate) {
                 log::debug!("[LOAD] propagation from pin {} failed: {}", pid, e);
+            }
+
+        }
+
+        // Restore explicit organizer pin rates from file (best-effort). This ensures C++ exported
+        // ins/outs values are preserved visually even when propagation touched them.
+        // Note: organizer_saved_pins uses file node indices which map to self.nodes in same order.
+        for (file_idx, is_in, pin_idx, saved_rate, saved_locked) in organizer_saved_pins {
+            if file_idx >= self.nodes.len() {
+                continue;
+            }
+            if let Some(n_any) = self.nodes[file_idx].downcast_mut::<OrganizerNode>() {
+                if is_in {
+                    if pin_idx < n_any.base.ins.len() {
+                        n_any.base.ins[pin_idx].current_rate = saved_rate;
+                        n_any.base.ins[pin_idx].locked = saved_locked;
+                    }
+                } else {
+                    if pin_idx < n_any.base.outs.len() {
+                        n_any.base.outs[pin_idx].current_rate = saved_rate;
+                        n_any.base.outs[pin_idx].locked = saved_locked;
+                    }
+                }
+            }
+        }
+
+        // Re-apply saved craft node rates to preserve visual node rates from file (best-effort)
+        for (file_idx, saved_rate) in craft_saved_rates {
+            if file_idx >= self.nodes.len() {
+                continue;
+            }
+            if let Some(n_any) = self.nodes[file_idx].downcast_mut::<CraftNode>() {
+                n_any.update_rate(saved_rate);
             }
         }
 
@@ -2832,7 +2940,42 @@ impl ProductionApp {
                 let mut node = OrganizerNode::new(node_id, kind, org.item.clone());
                 node.base.position = (org.pos.x, org.pos.y);
 
-                // Pins for organizers will be dynamically created based on connections
+                // If the serialized organizer includes explicit pin descriptions (some C++ exports do),
+                // restore those pins and their rates/locked flags so the graph looks correct on load.
+                if let Some(ins) = &org.ins {
+                    for entry in ins {
+                        let pin_id = self.get_next_id();
+                        let base_rate = FractionalNumber::new(entry.num, entry.den);
+                        let mut pin = Pin::new(
+                            pin_id,
+                            PinDirection::Input,
+                            node_id,
+                            entry.item.clone().or_else(|| org.item.clone()),
+                            entry.locked,
+                            base_rate,
+                        );
+                        // Restore current rate to saved value
+                        pin.current_rate = base_rate;
+                        node.base.ins.push(pin);
+                    }
+                }
+                if let Some(outs) = &org.outs {
+                    for entry in outs {
+                        let pin_id = self.get_next_id();
+                        let base_rate = FractionalNumber::new(entry.num, entry.den);
+                        let mut pin = Pin::new(
+                            pin_id,
+                            PinDirection::Output,
+                            node_id,
+                            entry.item.clone().or_else(|| org.item.clone()),
+                            entry.locked,
+                            base_rate,
+                        );
+                        pin.current_rate = base_rate;
+                        node.base.outs.push(pin);
+                    }
+                }
+
                 self.nodes.push(Box::new(node));
             }
         }
@@ -3116,6 +3259,9 @@ impl ProductionApp {
                     y: org.base.position.1,
                 },
                 item: org.item_name.clone(),
+                // When saving from Rust, we don't emit explicit organizer pin arrays
+                ins: None,
+                outs: None,
             }))
         } else {
             None

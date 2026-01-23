@@ -40,6 +40,16 @@ pub struct SerializedSinkInput {
     pub locked: bool,
 }
 
+/// Simple representation for organizer pin entries (used in some file exports)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializedPinEntry {
+    #[serde(default)]
+    pub item: Option<String>,
+    pub num: i64,
+    pub den: i64,
+    pub locked: bool,
+}
+
 /// Organizer node (splitters/mergers)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedOrganizerNode {
@@ -47,6 +57,11 @@ pub struct SerializedOrganizerNode {
     pub pos: SerializedPosition,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item: Option<String>,
+    /// Some exported files (from C++ app) include ins/outs arrays for organizers; support them for compatibility
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ins: Option<Vec<SerializedPinEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outs: Option<Vec<SerializedPinEntry>>,
 }
 
 /// Position in the graph

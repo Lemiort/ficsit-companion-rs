@@ -221,6 +221,40 @@ fn test_pin_rates_preserved_on_save_reload() {
 }
 
 #[test]
+fn test_merger_splitter_import_compatibility() {
+    // Load the C++ exported example and verify organizer pins are restored
+    let json = include_str!("../tests/merger_splitter_test.fcs");
+    let game_data = load_game_data();
+
+    let mut app = ProductionApp::new();
+    app.load_from_json(json, Some(&game_data))
+        .expect("Failed to load merger_splitter_test.fcs");
+
+    // Node index 9 in the file is the Merger (kind=2)
+    let merger_node_id = app.find_node_by_index(9).expect("Merger node missing");
+    // Merger should have 2 inputs and 1 output
+    let (ins, outs) = app.get_node_pin_rates(merger_node_id).expect("Failed to get merger pin rates");
+    assert_eq!(ins.len(), 2, "Merger should have 2 inputs");
+    assert_eq!(outs.len(), 1, "Merger should have 1 output");
+
+    // Rates should match saved values (10, 30 -> out 40)
+    assert_eq!(ins[0].as_ref().unwrap(), "10");
+    assert_eq!(ins[1].as_ref().unwrap(), "30");
+    assert_eq!(outs[0].as_ref().unwrap(), "40");
+
+    // Node index 10 is a CustomSplitter (kind=1) with 1 input, 3 outputs
+    let splitter_node_id = app.find_node_by_index(10).expect("Splitter node missing");
+    let (s_ins, s_outs) = app.get_node_pin_rates(splitter_node_id).expect("Failed to get splitter pin rates");
+    assert_eq!(s_ins.len(), 1, "Splitter should have 1 input");
+    assert_eq!(s_outs.len(), 3, "Splitter should have 3 outputs");
+
+    // Output rates should match saved values (15, 36, 0)
+    assert_eq!(s_outs[0].as_ref().unwrap(), "15");
+    assert_eq!(s_outs[1].as_ref().unwrap(), "36");
+    assert_eq!(s_outs[2].as_ref().unwrap(), "0");
+}
+
+#[test]
 fn test_power_generator_detection() {
     let game_data = load_game_data();
     let mut app = ProductionApp::new();

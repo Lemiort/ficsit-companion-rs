@@ -119,7 +119,6 @@ impl GameData {
                         .get("time")
                         .and_then(|v| parse_frac(v))
                         .ok_or_else(|| format!("Failed to parse time for recipe {}", name))?;
-                    log::debug!("Parsed time for recipe {}: {:?}", name, time);
 
                     let per_minute_scale = FractionalNumber::from(60) / time;
 
