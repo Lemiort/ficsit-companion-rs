@@ -964,13 +964,20 @@ impl SnarlViewer {
                 }
 
                 // Queue update to ProductionApp
-                self.pending_changes
-                    .push(PendingChange::item(node_display_id, chosen.clone()));
-                log::debug!(
-                    "[UI] queued pending_node_item_change: node={} item={:?}",
-                    node_display_id,
-                    chosen
-                );
+                // workaround FIXME
+                // Compare with current cached/production value. Only push changes when a
+                // chosen item is detected from remotes. Do not clear production-held
+                // organizer item when there are no remotes (chosen == None).
+                let current_name = self
+                    .node_cache
+                    .get(&node_display_id)
+                    .and_then(|c| c.item_data().map(|i| i.name.clone()));
+                if chosen.is_some() {
+                    if current_name != chosen {
+                        self.pending_changes
+                            .push(PendingChange::item(node_display_id, chosen.clone()));
+                    }
+                }
             }
             GraphNodeType::Sink => {
                 // Sinks should NOT have a node-level item_type — pins carry their own types.
@@ -1039,13 +1046,19 @@ impl SnarlViewer {
                 }
 
                 // Queue update to ProductionApp
-                self.pending_changes
-                    .push(PendingChange::item(node_display_id, chosen.clone()));
-                log::debug!(
-                    "[UI] queued pending_node_item_change: node={} item={:?}",
-                    node_display_id,
-                    chosen
-                );
+                // workaround FIXME
+                // Compare with current cached/production value. Only push changes when a
+                // chosen item is detected from remotes. Do not clear production-held
+                // organizer item when there are no remotes (chosen == None).
+                let current_name = self
+                    .node_cache
+                    .get(&node_display_id)
+                    .and_then(|c| c.item_data().map(|i| i.name.clone()));
+                if chosen.is_some() {
+                    if current_name != chosen {
+                        self.pending_changes.push(PendingChange::item(node_display_id, chosen.clone()));
+                    }
+                }
             }
             _ => {}
         }
@@ -2473,6 +2486,18 @@ impl TemplateApp {
                 node_map.insert(node_id, ui_node);
             }
         }
+
+        // Rebuild node display cache now that UI nodes exist so sync operations
+        // (which run after connecting links) can consult per-node display data
+        // such as pin item names. Without this, sync_merger_splitter will
+        // not see remote pin item names and may clear organizer item types.
+        self.snarl_viewer.rebuild_node_cache(
+            &self.production_app,
+            &self.snarl,
+            &self.item_icon_cache,
+            self.item_icon_cache.get("Somersloop").map(|h| h.id()),
+            &self.game_data,
+        );
 
         // Connect links (use production_app.find_pin_location to map pin ids -> node/pin idx)
         for link in &self.production_app.links {
