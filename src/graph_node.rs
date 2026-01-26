@@ -74,15 +74,25 @@ impl std::fmt::Display for GraphNodeType {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ItemData {
+    pub name: String,
+    pub icon: egui::TextureId,
+}
+
+impl PartialEq for ItemData {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
 /// Common pin data shared by all node types
 #[derive(Clone, Debug, Default)]
 pub struct PinData {
-    pub input_names: Vec<Option<String>>,
-    pub input_icons: Vec<Option<egui::TextureId>>,
+    pub input_items: Vec<Option<ItemData>>,
     pub input_rates: Vec<Option<FractionalNumber>>,
     pub input_locked: Vec<bool>,
-    pub output_names: Vec<Option<String>>,
-    pub output_icons: Vec<Option<egui::TextureId>>,
+    pub output_items: Vec<Option<ItemData>>,
     pub output_rates: Vec<Option<FractionalNumber>>,
     pub output_locked: Vec<bool>,
 }
@@ -122,8 +132,7 @@ impl Default for CraftData {
 /// Organizer (Merger/Splitter) node specific data
 #[derive(Clone, Debug, Default)]
 pub struct OrganizerData {
-    pub item_type: Option<String>,
-    pub item_type_icon: Option<egui::TextureId>,
+    pub item_type: Option<ItemData>,
 }
 
 /// Sink node specific data
@@ -131,8 +140,7 @@ pub struct OrganizerData {
 pub struct SinkData {
     pub sink_points: FractionalNumber,
     pub sink_points_fraction_str: String,
-    pub item_type: Option<String>,
-    pub item_type_icon: Option<egui::TextureId>,
+    pub item_type: Option<ItemData>,
 }
 
 /// Group node specific data
@@ -263,24 +271,12 @@ impl NodeDisplayData {
         )
     }
 
-    /// Get item type for organizer/sink nodes
-    pub fn item_type(&self) -> Option<&String> {
+    pub fn item_data(&self) -> Option<&ItemData> {
         match self {
             NodeDisplayData::Merger { organizer, .. } => organizer.item_type.as_ref(),
             NodeDisplayData::GameSplitter { organizer, .. } => organizer.item_type.as_ref(),
             NodeDisplayData::CustomSplitter { organizer, .. } => organizer.item_type.as_ref(),
             NodeDisplayData::Sink { sink, .. } => sink.item_type.as_ref(),
-            _ => None,
-        }
-    }
-
-    /// Get item type icon for organizer/sink nodes
-    pub fn item_type_icon(&self) -> Option<egui::TextureId> {
-        match self {
-            NodeDisplayData::Merger { organizer, .. } => organizer.item_type_icon,
-            NodeDisplayData::GameSplitter { organizer, .. } => organizer.item_type_icon,
-            NodeDisplayData::CustomSplitter { organizer, .. } => organizer.item_type_icon,
-            NodeDisplayData::Sink { sink, .. } => sink.item_type_icon,
             _ => None,
         }
     }

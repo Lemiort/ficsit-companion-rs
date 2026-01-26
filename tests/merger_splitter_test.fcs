@@ -1,0 +1,342 @@
+{
+    "game_version": "1.0",
+    "links": [
+        {
+            "end": {
+                "node": 0,
+                "pin": 0
+            },
+            "start": {
+                "node": 1,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 0,
+                "pin": 1
+            },
+            "start": {
+                "node": 2,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 0,
+                "pin": 2
+            },
+            "start": {
+                "node": 3,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 5,
+                "pin": 0
+            },
+            "start": {
+                "node": 4,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 4,
+                "pin": 0
+            },
+            "start": {
+                "node": 6,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 6,
+                "pin": 0
+            },
+            "start": {
+                "node": 7,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 9,
+                "pin": 0
+            },
+            "start": {
+                "node": 8,
+                "pin": 1
+            }
+        },
+        {
+            "end": {
+                "node": 8,
+                "pin": 2
+            },
+            "start": {
+                "node": 9,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 8,
+                "pin": 1
+            },
+            "start": {
+                "node": 10,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 10,
+                "pin": 0
+            },
+            "start": {
+                "node": 11,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 12,
+                "pin": 1
+            },
+            "start": {
+                "node": 10,
+                "pin": 1
+            }
+        }
+    ],
+    "nodes": [
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -7768.0,
+                "y": -2969.0
+            },
+            "rate": {
+                "den": 1,
+                "num": 1
+            },
+            "recipe": "Crystal Oscillator"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -8332.0,
+                "y": -2970.0
+            },
+            "rate": {
+                "den": 5,
+                "num": 4
+            },
+            "recipe": "Quartz Crystal"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -8312.0,
+                "y": -2870.0
+            },
+            "rate": {
+                "den": 15,
+                "num": 7
+            },
+            "recipe": "Cable"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -8168.0,
+                "y": -2576.0
+            },
+            "rate": {
+                "den": 2,
+                "num": 1
+            },
+            "recipe": "Reinforced Iron Plate"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": 2329.0,
+                "y": 2166.0
+            },
+            "rate": {
+                "den": 16,
+                "num": 9
+            },
+            "recipe": "Iron Plate"
+        },
+        {
+            "ins": [
+                {
+                    "den": 4,
+                    "item": "Iron Plate",
+                    "locked": false,
+                    "num": 45
+                }
+            ],
+            "kind": 5,
+            "pos": {
+                "x": 2712.0,
+                "y": 2164.0
+            }
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": 1896.0,
+                "y": 2182.0
+            },
+            "rate": {
+                "den": 16,
+                "num": 9
+            },
+            "recipe": "Iron Ingot"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": 1501.0,
+                "y": 2184.0
+            },
+            "rate": {
+                "den": 64,
+                "num": 9
+            },
+            "recipe": "Iron Ore (Limestone)"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -56.0,
+                "y": 370.0
+            },
+            "rate": {
+                "den": 1,
+                "num": 1
+            },
+            "recipe": "Encased Uranium Cell"
+        },
+        {
+            "ins": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 10
+                },
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 30
+                }
+            ],
+            "item": "Sulfuric Acid",
+            "kind": 2,
+            "outs": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 40
+                }
+            ],
+            "pos": {
+                "x": 153.0,
+                "y": 662.0
+            }
+        },
+        {
+            "ins": [
+                {
+                    "den": 1,
+                    "locked": false,
+                    "num": 51
+                }
+            ],
+            "item": "Concrete",
+            "kind": 1,
+            "outs": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 15
+                },
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 36
+                },
+                {
+                    "den": 1,
+                    "locked": false,
+                    "num": 0
+                }
+            ],
+            "pos": {
+                "x": -342.0,
+                "y": 437.0
+            }
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -808.0,
+                "y": 457.0
+            },
+            "rate": {
+                "den": 5,
+                "num": 17
+            },
+            "recipe": "Concrete"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -46.0,
+                "y": 793.0
+            },
+            "rate": {
+                "den": 1,
+                "num": 1
+            },
+            "recipe": "Encased Industrial Beam"
+        }
+    ],
+    "save_version": 5
+}

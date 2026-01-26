@@ -1,4 +1,4 @@
-use crate::graph_node::{CraftData, GroupData, OrganizerData, PinData, SinkData};
+use crate::graph_node::{CraftData, GroupData, ItemData, OrganizerData, PinData, SinkData};
 use crate::graph_node::{GraphNode, GraphNodeType, NodeDisplayData, PendingChange};
 use crate::{FractionalNumber, production_app::ProductionApp};
 use serde::{Deserialize, Serialize};
@@ -330,8 +330,32 @@ impl SnarlViewer {
             if let Some((input_names, output_names)) =
                 production_app.get_node_pin_item_names(node_id)
             {
-                pins.input_names = input_names;
-                pins.output_names = output_names;
+                pins.input_items = input_names
+                    .iter()
+                    .map(|opt| {
+                        opt.as_ref().and_then(|n: &String| {
+                            item_icon_cache.get(n).map(|h| h.id()).and_then(|icon| {
+                                Some(ItemData {
+                                    name: n.clone(),
+                                    icon,
+                                })
+                            })
+                        })
+                    })
+                    .collect();
+                pins.output_items = output_names
+                    .iter()
+                    .map(|opt| {
+                        opt.as_ref().and_then(|n: &String| {
+                            item_icon_cache.get(n).map(|h| h.id()).and_then(|icon| {
+                                Some(ItemData {
+                                    name: n.clone(),
+                                    icon,
+                                })
+                            })
+                        })
+                    })
+                    .collect();
             }
 
             if let Some((ins, outs)) = production_app.get_node_pin_rates(node_id) {
@@ -357,23 +381,6 @@ impl SnarlViewer {
                 pins.input_locked = ins_locked;
                 pins.output_locked = outs_locked;
             }
-
-            pins.input_icons = pins
-                .input_names
-                .iter()
-                .map(|opt| {
-                    opt.as_ref()
-                        .and_then(|n| item_icon_cache.get(n).map(|h| h.id()))
-                })
-                .collect();
-            pins.output_icons = pins
-                .output_names
-                .iter()
-                .map(|opt| {
-                    opt.as_ref()
-                        .and_then(|n| item_icon_cache.get(n).map(|h| h.id()))
-                })
-                .collect();
 
             // Build node-type-specific display data
             let display = match graph_node.node_type {
@@ -428,8 +435,15 @@ impl SnarlViewer {
                 GraphNodeType::Merger => {
                     let mut organizer = OrganizerData::default();
                     if let Some(item_name) = production_app.get_node_item_name(node_id) {
-                        organizer.item_type_icon = item_icon_cache.get(&item_name).map(|h| h.id());
-                        organizer.item_type = Some(item_name);
+                        organizer.item_type = item_icon_cache
+                            .get(&item_name)
+                            .map(|h| h.id())
+                            .and_then(|icon| {
+                                Some(ItemData {
+                                    name: item_name,
+                                    icon,
+                                })
+                            });
                     }
                     NodeDisplayData::Merger {
                         id: node_id,
@@ -442,8 +456,15 @@ impl SnarlViewer {
                 GraphNodeType::GameSplitter => {
                     let mut organizer = OrganizerData::default();
                     if let Some(item_name) = production_app.get_node_item_name(node_id) {
-                        organizer.item_type_icon = item_icon_cache.get(&item_name).map(|h| h.id());
-                        organizer.item_type = Some(item_name);
+                        organizer.item_type = item_icon_cache
+                            .get(&item_name)
+                            .map(|h| h.id())
+                            .and_then(|icon| {
+                                Some(ItemData {
+                                    name: item_name,
+                                    icon,
+                                })
+                            });
                     }
                     NodeDisplayData::GameSplitter {
                         id: node_id,
@@ -456,8 +477,15 @@ impl SnarlViewer {
                 GraphNodeType::CustomSplitter => {
                     let mut organizer = OrganizerData::default();
                     if let Some(item_name) = production_app.get_node_item_name(node_id) {
-                        organizer.item_type_icon = item_icon_cache.get(&item_name).map(|h| h.id());
-                        organizer.item_type = Some(item_name);
+                        organizer.item_type = item_icon_cache
+                            .get(&item_name)
+                            .map(|h| h.id())
+                            .and_then(|icon| {
+                                Some(ItemData {
+                                    name: item_name,
+                                    icon,
+                                })
+                            });
                     }
                     NodeDisplayData::CustomSplitter {
                         id: node_id,
@@ -472,16 +500,24 @@ impl SnarlViewer {
 
                     // Get item type for sink
                     if let Some(item_name) = production_app.get_node_item_name(node_id) {
-                        sink.item_type_icon = item_icon_cache.get(&item_name).map(|h| h.id());
-                        sink.item_type = Some(item_name);
+                        sink.item_type =
+                            item_icon_cache
+                                .get(&item_name)
+                                .map(|h| h.id())
+                                .and_then(|icon| {
+                                    Some(ItemData {
+                                        name: item_name,
+                                        icon,
+                                    })
+                                });
                     }
 
                     // Calculate sink points
                     let mut sum = FractionalNumber::default();
-                    for (opt_name, opt_rate) in pins.input_names.iter().zip(pins.input_rates.iter())
+                    for (opt_item, opt_rate) in pins.input_items.iter().zip(pins.input_rates.iter())
                     {
-                        if let (Some(name), Some(rate_f)) = (opt_name.as_ref(), opt_rate.as_ref()) {
-                            if let Some(item_rc) = game_data.items.get(name) {
+                        if let (Some(item), Some(rate_f)) = (opt_item.as_ref(), opt_rate.as_ref()) {
+                            if let Some(item_rc) = game_data.items.get(item.name.as_str()) {
                                 let pts = rate_f.clone()
                                     * FractionalNumber::from(item_rc.sink_value as i64);
                                 sum += pts;
@@ -830,8 +866,8 @@ impl SnarlViewer {
         if self.output_row_width.is_none() {
             let mut max_label_w = 0.0f32;
             let mut max_lines = 1usize;
-            for opt in node.pins().output_names.iter() {
-                let orig = opt.as_ref().map(|s| s.as_str()).unwrap_or("Out");
+            for opt in node.pins().output_items.iter() {
+                let orig = opt.as_ref().map(|s| s.name.as_str()).unwrap_or("Out");
                 let disp = orig.replace(' ', "\n");
                 let mut label_w = 0.0f32;
                 let line_count = disp.matches('\n').count() + 1;
@@ -903,7 +939,7 @@ impl SnarlViewer {
                 let input_count = self
                     .node_cache
                     .get(&node_display_id)
-                    .map(|c| c.pins().input_names.len())
+                    .map(|c| c.pins().input_items.len())
                     .unwrap_or(0);
 
                 for input_idx in 0..input_count {
@@ -916,10 +952,10 @@ impl SnarlViewer {
                         // Look up remote node's output name from cache
                         if let Some(remote_graph_node) = snarl.get_node(remote.node) {
                             if let Some(remote_cache) = self.node_cache.get(&remote_graph_node.id) {
-                                if let Some(Some(name)) =
-                                    remote_cache.pins().output_names.get(remote.output)
+                                if let Some(Some(item)) =
+                                    remote_cache.pins().output_items.get(remote.output)
                                 {
-                                    chosen = Some(name.clone());
+                                    chosen = Some(item.name.clone());
                                     break;
                                 }
                             }
@@ -941,7 +977,7 @@ impl SnarlViewer {
                 let input_count = self
                     .node_cache
                     .get(&node_display_id)
-                    .map(|c| c.pins().input_names.len())
+                    .map(|c| c.pins().input_items.len())
                     .unwrap_or(0);
 
                 for input_idx in 0..input_count {
@@ -961,10 +997,10 @@ impl SnarlViewer {
                                 if let Some(remote_cache) =
                                     self.node_cache.get(&remote_graph_node.id)
                                 {
-                                    if let Some(Some(name)) =
-                                        remote_cache.pins().output_names.get(r.output)
+                                    if let Some(Some(item)) =
+                                        remote_cache.pins().output_items.get(r.output)
                                     {
-                                        found = Some(name.clone());
+                                        found = Some(item.name.clone());
                                         break;
                                     }
                                 }
@@ -993,10 +1029,10 @@ impl SnarlViewer {
                 if let Some(remote) = in_pin.remotes.first() {
                     if let Some(remote_graph_node) = snarl.get_node(remote.node) {
                         if let Some(remote_cache) = self.node_cache.get(&remote_graph_node.id) {
-                            if let Some(Some(name)) =
-                                remote_cache.pins().output_names.get(remote.output)
+                            if let Some(Some(item)) =
+                                remote_cache.pins().output_items.get(remote.output)
                             {
-                                chosen = Some(name.clone());
+                                chosen = Some(item.name.clone());
                             }
                         }
                     }
@@ -1261,16 +1297,12 @@ impl SnarlViewer {
 
                 // Center column: item type (icon + label)
                 ui.horizontal(|ui| {
-                    if let Some(name) = organizer.item_type.as_ref() {
-                        if let Some(tex) = organizer.item_type_icon {
-                            let icon_size = egui::vec2(
-                                ui.spacing().interact_size.y,
-                                ui.spacing().interact_size.y,
-                            );
-                            ui.image((tex, icon_size));
-                            ui.add_space(6.0);
-                        }
-                        ui.label(name);
+                    if let Some(item) = organizer.item_type.as_ref() {
+                        let icon_size =
+                            egui::vec2(ui.spacing().interact_size.y, ui.spacing().interact_size.y);
+                        ui.image((item.icon, icon_size));
+                        ui.add_space(6.0);
+                        ui.label(item.name.clone());
                     }
                 });
 
@@ -1335,17 +1367,13 @@ impl SnarlViewer {
             .min_col_width(ui.available_width() / 3.0)
             .show(ui, |ui| {
                 // Show item_type if present, otherwise show points
-                if let Some(name) = sink.item_type.as_ref() {
+                if let Some(item) = sink.item_type.as_ref() {
                     ui.horizontal(|ui| {
-                        if let Some(tex) = sink.item_type_icon {
-                            let icon_size = egui::vec2(
-                                ui.spacing().interact_size.y,
-                                ui.spacing().interact_size.y,
-                            );
-                            ui.image((tex, icon_size));
-                            ui.add_space(6.0);
-                        }
-                        ui.label(name);
+                        let icon_size =
+                            egui::vec2(ui.spacing().interact_size.y, ui.spacing().interact_size.y);
+                        ui.image((item.icon, icon_size));
+                        ui.add_space(6.0);
+                        ui.label(item.name.clone());
                     });
                 } else {
                     ui.horizontal(|ui| {
@@ -1428,7 +1456,7 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
         if let Some(cached) = self.node_cache.get(&node.id) {
             self.current_node_id = Some(node.id);
             self.input_cursor = 0;
-            cached.pins().input_names.len()
+            cached.pins().input_items.len()
         } else {
             // Cache miss - return 0 inputs
             self.current_node_id = None;
@@ -1445,7 +1473,7 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
             self.output_anchor_right = None;
             self.output_row_width = None;
             self.output_row_height = None;
-            cached.pins().output_names.len()
+            cached.pins().output_items.len()
         } else {
             // Cache miss - return 0 outputs
             self.current_node_id = None;
@@ -1475,7 +1503,7 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     // 'x' remove button for mergers/sinks (near outer edge)
                     if ntype == GraphNodeType::Merger || ntype == GraphNodeType::Sink {
-                        let can_remove = pins.input_names.len() > 1;
+                        let can_remove = pins.input_items.len() > 1;
                         let btn = egui::Button::new("x")
                             .corner_radius(egui::CornerRadius::same(0))
                             .small();
@@ -1548,12 +1576,10 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                     // Icon + Label handling
                     if ntype == GraphNodeType::Sink {
                         // For sinks, show an icon+label only if the pin has an item assigned; otherwise show nothing
-                        if let Some(Some(name)) = pins.input_names.get(idx) {
-                            if let Some(Some(tex)) = pins.input_icons.get(idx) {
-                                ui.image((*tex, size));
-                                ui.add_space(6.0);
-                            }
-                            let disp = name.replace(' ', "\n");
+                        if let Some(Some(item)) = pins.input_items.get(idx) {
+                            ui.image((item.icon, size));
+                            ui.add_space(6.0);
+                            let disp = item.name.clone().replace(' ', "\n");
                             ui.label(disp);
                         } else {
                             // sink: intentionally show nothing when no item set
@@ -1565,14 +1591,14 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                             && ntype != GraphNodeType::CustomSplitter
                             && ntype != GraphNodeType::GameSplitter
                         {
-                            if let Some(Some(tex)) = pins.input_icons.get(idx) {
+                            if let Some(Some(item)) = pins.input_items.get(idx) {
                                 // Use the image widget to draw the texture (lets egui handle clipping/alpha)
-                                ui.image((*tex, size));
+                                ui.image((item.icon, size));
                             }
 
                             // Label closest to center (display names with spaces -> newlines to match C++)
-                            if let Some(Some(name)) = pins.input_names.get(idx) {
-                                let disp = name.replace(' ', "\n");
+                            if let Some(Some(item)) = pins.input_items.get(idx) {
+                                let disp = item.name.clone().replace(' ', "\n");
                                 ui.label(disp);
                             } else {
                                 ui.label("In");
@@ -1625,7 +1651,7 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                         if ntype == GraphNodeType::CustomSplitter
                             || ntype == GraphNodeType::GameSplitter
                         {
-                            let can_remove = pins.output_names.len() > 1;
+                            let can_remove = pins.output_items.len() > 1;
                             let btn = egui::Button::new("x")
                                 .corner_radius(egui::CornerRadius::same(0))
                                 .small();
@@ -1700,15 +1726,15 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                             && ntype != GraphNodeType::GameSplitter
                         {
                             // Icon next (inward)
-                            if let Some(Some(tex)) = pins.output_icons.get(idx) {
+                            if let Some(Some(item)) = pins.output_items.get(idx) {
                                 // Use widget-based image drawing
-                                let resp = ui.image((*tex, size));
+                                let resp = ui.image((item.icon, size));
                                 icon_rect = Some(resp.rect);
                             }
 
                             // Label closest to center (display names with spaces -> newlines to match C++)
-                            if let Some(Some(name)) = pins.output_names.get(idx) {
-                                let disp = name.replace(' ', "\n");
+                            if let Some(Some(item)) = pins.output_items.get(idx) {
+                                let disp = item.name.clone().replace(' ', "\n");
                                 let resp = ui.label(disp);
                                 label_rect = Some(resp.rect);
                             } else {
@@ -1847,10 +1873,10 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                     if let Some(graph_node) = _snarl.get_node(out.node) {
                         // Look up cached display data
                         if let Some(cached) = self.node_cache.get(&graph_node.id) {
-                            if let Some(Some(name)) = cached.pins().output_names.get(out.output) {
-                                detected_item = Some(name.clone());
-                            } else if let Some(name) = cached.item_type() {
-                                detected_item = Some(name.clone());
+                            if let Some(Some(item)) = cached.pins().output_items.get(out.output) {
+                                detected_item = Some(item.name.clone());
+                            } else if let Some(item) = cached.item_data() {
+                                detected_item = Some(item.name.clone());
                                 detected_from_node_item = true;
                             }
                         }
@@ -1863,8 +1889,8 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                 if ins.len() == 1 {
                     if let Some(graph_node) = _snarl.get_node(ins[0].node) {
                         if let Some(cached) = self.node_cache.get(&graph_node.id) {
-                            if let Some(Some(name)) = cached.pins().input_names.get(ins[0].input) {
-                                detected_item = Some(name.clone());
+                            if let Some(Some(item)) = cached.pins().input_items.get(ins[0].input) {
+                                detected_item = Some(item.name.clone());
                             }
                         }
                     }
@@ -1926,12 +1952,12 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
         let out_name = snarl
             .get_node(from.id.node)
             .and_then(|gn| self.node_cache.get(&gn.id))
-            .and_then(|c| c.pins().output_names.get(from.id.output))
+            .and_then(|c| c.pins().output_items.get(from.id.output))
             .and_then(|opt| opt.clone());
         let in_name = snarl
             .get_node(to.id.node)
             .and_then(|gn| self.node_cache.get(&gn.id))
-            .and_then(|c| c.pins().input_names.get(to.id.input))
+            .and_then(|c| c.pins().input_items.get(to.id.input))
             .and_then(|opt| opt.clone());
 
         // Debug: log the attempted connection and the current item types on both pins
@@ -1951,13 +1977,13 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                 if in_has_remotes {
                     log::info!(
                         "[CONNECT] types differ ('{}' != '{}') but input has existing remotes — will replace them",
-                        outn,
-                        inn
+                        outn.name,
+                        inn.name
                     );
                 } else {
                     let msg = format!(
                         "Cannot connect different item types: '{}' -> '{}'",
-                        outn, inn
+                        outn.name, inn.name
                     );
                     log::warn!("[CONNECT] {}", msg);
                     self.rejected_connection_reason = Some(msg);
@@ -2905,7 +2931,7 @@ impl TemplateApp {
                         };
                         // Get input count and names from cache
                         let input_count = app.snarl_viewer.node_cache.get(&node_prod_id)
-                            .map(|c| c.pins().input_names.len())
+                            .map(|c| c.pins().input_items.len())
                             .unwrap_or(0);
                         log::info!("[AUTO-WIRE] node_prod_id={}, input_count={}", node_prod_id, input_count);
                         if input_count == 0 {
@@ -2916,8 +2942,8 @@ impl TemplateApp {
                         // Prefer to match by item name if the dropped wire had a detected item
                         let dest_idx = if let Some(ref item_name) = pending.src_item_name {
                             app.snarl_viewer.node_cache.get(&node_prod_id)
-                                .and_then(|c| c.pins().input_names.iter()
-                                    .position(|opt| opt.as_ref().map(|s| s == item_name).unwrap_or(false)))
+                                .and_then(|c| c.pins().input_items.iter()
+                                    .position(|opt| opt.as_ref().map(|s| s.name == *item_name).unwrap_or(false)))
                                 .unwrap_or_else(|| if out.output < input_count { out.output } else { input_count - 1 })
                         } else {
                             if out.output < input_count { out.output } else { input_count - 1 }
@@ -2978,7 +3004,7 @@ impl TemplateApp {
                         };
                         // Get output count and names from cache
                         let output_count = app.snarl_viewer.node_cache.get(&node_prod_id)
-                            .map(|c| c.pins().output_names.len())
+                            .map(|c| c.pins().output_items.len())
                             .unwrap_or(0);
                         log::info!("[AUTO-WIRE] (ins) node_prod_id={}, output_count={}", node_prod_id, output_count);
                         if output_count == 0 {
@@ -2989,8 +3015,8 @@ impl TemplateApp {
                         // Prefer to match by item name if the dropped wire had a detected item
                         let out_idx = if let Some(ref item_name) = pending.src_item_name {
                             app.snarl_viewer.node_cache.get(&node_prod_id)
-                                .and_then(|c| c.pins().output_names.iter()
-                                    .position(|opt| opt.as_ref().map(|s| s == item_name).unwrap_or(false)))
+                                .and_then(|c| c.pins().output_items.iter()
+                                    .position(|opt| opt.as_ref().map(|s| s.name == *item_name).unwrap_or(false)))
                                 .unwrap_or_else(|| if inp.input < output_count { inp.input } else { output_count - 1 })
                         } else {
                             if inp.input < output_count { inp.input } else { output_count - 1 }

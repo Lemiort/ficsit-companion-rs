@@ -8,7 +8,7 @@ use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub, SubAssign};
 /// A fractional number using rational arithmetic for precise calculations.
 /// This is a wrapper around Rational64 with additional features like string parsing
 /// and expression evaluation (supporting +, -, *, /, parentheses).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FractionalNumber(Rational64);
 
 impl Serialize for FractionalNumber {
@@ -266,6 +266,12 @@ impl From<(i64, i64)> for FractionalNumber {
 
 impl fmt::Display for FractionalNumber {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_fraction_string())
+    }
+}
+
+impl std::fmt::Debug for FractionalNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_fraction_string())
     }
 }

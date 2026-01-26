@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 #[serde(untagged)]
 pub enum SerializedNode {
     Craft(SerializedCraftNode),
-    Sink(SerializedSinkNode),
     Organizer(SerializedOrganizerNode),
+    Sink(SerializedSinkNode),
 }
 
 /// Craft node serialization

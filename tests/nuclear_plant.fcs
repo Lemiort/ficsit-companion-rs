@@ -1,0 +1,997 @@
+{
+    "game_version": "1.0",
+    "links": [
+        {
+            "end": {
+                "node": 0,
+                "pin": 0
+            },
+            "start": {
+                "node": 1,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 0,
+                "pin": 1
+            },
+            "start": {
+                "node": 2,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 0,
+                "pin": 2
+            },
+            "start": {
+                "node": 3,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 5,
+                "pin": 0
+            },
+            "start": {
+                "node": 4,
+                "pin": 1
+            }
+        },
+        {
+            "end": {
+                "node": 4,
+                "pin": 2
+            },
+            "start": {
+                "node": 5,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 4,
+                "pin": 1
+            },
+            "start": {
+                "node": 6,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 6,
+                "pin": 0
+            },
+            "start": {
+                "node": 7,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 8,
+                "pin": 1
+            },
+            "start": {
+                "node": 6,
+                "pin": 1
+            }
+        },
+        {
+            "end": {
+                "node": 5,
+                "pin": 1
+            },
+            "start": {
+                "node": 9,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 8,
+                "pin": 0
+            },
+            "start": {
+                "node": 10,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 10,
+                "pin": 0
+            },
+            "start": {
+                "node": 11,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 12,
+                "pin": 0
+            },
+            "start": {
+                "node": 4,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 12,
+                "pin": 1
+            },
+            "start": {
+                "node": 13,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 13,
+                "pin": 0
+            },
+            "start": {
+                "node": 10,
+                "pin": 1
+            }
+        },
+        {
+            "end": {
+                "node": 13,
+                "pin": 1
+            },
+            "start": {
+                "node": 6,
+                "pin": 2
+            }
+        },
+        {
+            "end": {
+                "node": 12,
+                "pin": 2
+            },
+            "start": {
+                "node": 14,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 14,
+                "pin": 1
+            },
+            "start": {
+                "node": 15,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 14,
+                "pin": 0
+            },
+            "start": {
+                "node": 16,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 11,
+                "pin": 0
+            },
+            "start": {
+                "node": 17,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 16,
+                "pin": 0
+            },
+            "start": {
+                "node": 18,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 18,
+                "pin": 0
+            },
+            "start": {
+                "node": 17,
+                "pin": 1
+            }
+        },
+        {
+            "end": {
+                "node": 15,
+                "pin": 0
+            },
+            "start": {
+                "node": 20,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 21,
+                "pin": 0
+            },
+            "start": {
+                "node": 19,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 16,
+                "pin": 1
+            },
+            "start": {
+                "node": 21,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 15,
+                "pin": 1
+            },
+            "start": {
+                "node": 22,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 22,
+                "pin": 0
+            },
+            "start": {
+                "node": 21,
+                "pin": 1
+            }
+        },
+        {
+            "end": {
+                "node": 15,
+                "pin": 2
+            },
+            "start": {
+                "node": 23,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 23,
+                "pin": 0
+            },
+            "start": {
+                "node": 24,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 19,
+                "pin": 0
+            },
+            "start": {
+                "node": 25,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 24,
+                "pin": 0
+            },
+            "start": {
+                "node": 25,
+                "pin": 1
+            }
+        },
+        {
+            "end": {
+                "node": 25,
+                "pin": 0
+            },
+            "start": {
+                "node": 26,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 17,
+                "pin": 0
+            },
+            "start": {
+                "node": 27,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 28,
+                "pin": 0
+            },
+            "start": {
+                "node": 12,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 20,
+                "pin": 0
+            },
+            "start": {
+                "node": 29,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 23,
+                "pin": 1
+            },
+            "start": {
+                "node": 30,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 31,
+                "pin": 0
+            },
+            "start": {
+                "node": 30,
+                "pin": 1
+            }
+        },
+        {
+            "end": {
+                "node": 32,
+                "pin": 0
+            },
+            "start": {
+                "node": 31,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 28,
+                "pin": 1
+            },
+            "start": {
+                "node": 33,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 9,
+                "pin": 1
+            },
+            "start": {
+                "node": 33,
+                "pin": 1
+            }
+        }
+    ],
+    "nodes": [
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -7768.0,
+                "y": -2969.0
+            },
+            "rate": {
+                "den": 1,
+                "num": 1
+            },
+            "recipe": "Crystal Oscillator"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -8332.0,
+                "y": -2970.0
+            },
+            "rate": {
+                "den": 5,
+                "num": 4
+            },
+            "recipe": "Quartz Crystal"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -8312.0,
+                "y": -2870.0
+            },
+            "rate": {
+                "den": 15,
+                "num": 7
+            },
+            "recipe": "Cable"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -8168.0,
+                "y": -2576.0
+            },
+            "rate": {
+                "den": 2,
+                "num": 1
+            },
+            "recipe": "Reinforced Iron Plate"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -56.0,
+                "y": 370.0
+            },
+            "rate": {
+                "den": 1,
+                "num": 1
+            },
+            "recipe": "Encased Uranium Cell"
+        },
+        {
+            "ins": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 10
+                },
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 30
+                }
+            ],
+            "item": "Sulfuric Acid",
+            "kind": 2,
+            "outs": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 40
+                }
+            ],
+            "pos": {
+                "x": 58.0,
+                "y": 514.0
+            }
+        },
+        {
+            "ins": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 60
+                }
+            ],
+            "item": "Concrete",
+            "kind": 1,
+            "outs": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 15
+                },
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 36
+                },
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 9
+                }
+            ],
+            "pos": {
+                "x": -342.0,
+                "y": 437.0
+            }
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -808.0,
+                "y": 457.0
+            },
+            "rate": {
+                "den": 1,
+                "num": 4
+            },
+            "recipe": "Concrete"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -46.0,
+                "y": 655.0
+            },
+            "rate": {
+                "den": 1,
+                "num": 1
+            },
+            "recipe": "Encased Industrial Beam"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -867.0,
+                "y": 678.0
+            },
+            "rate": {
+                "den": 5,
+                "num": 3
+            },
+            "recipe": "Sulfuric Acid"
+        },
+        {
+            "ins": [
+                {
+                    "den": 2,
+                    "locked": true,
+                    "num": 45
+                }
+            ],
+            "item": "Steel Beam",
+            "kind": 1,
+            "outs": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 18
+                },
+                {
+                    "den": 2,
+                    "locked": true,
+                    "num": 9
+                }
+            ],
+            "pos": {
+                "x": -278.0,
+                "y": 930.0
+            }
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -839.0,
+                "y": 1108.0
+            },
+            "rate": {
+                "den": 2,
+                "num": 3
+            },
+            "recipe": "Steel Beam"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": 741.0,
+                "y": 402.0
+            },
+            "rate": {
+                "den": 4,
+                "num": 5
+            },
+            "recipe": "Uranium Fuel Rod"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -40.0,
+                "y": 777.0
+            },
+            "rate": {
+                "den": 4,
+                "num": 1
+            },
+            "recipe": "Encased Industrial Beam"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": 196.0,
+                "y": 991.0
+            },
+            "rate": {
+                "den": 16,
+                "num": 5
+            },
+            "recipe": "Electromagnetic Connection Rod"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -149.0,
+                "y": 1250.0
+            },
+            "rate": {
+                "den": 3,
+                "num": 1
+            },
+            "recipe": "High-Speed Connector"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -286.0,
+                "y": 1081.0
+            },
+            "rate": {
+                "den": 2,
+                "num": 1
+            },
+            "recipe": "Stator"
+        },
+        {
+            "ins": [
+                {
+                    "den": 4,
+                    "locked": true,
+                    "num": 405
+                }
+            ],
+            "item": "Steel Ingot",
+            "kind": 1,
+            "outs": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 90
+                },
+                {
+                    "den": 4,
+                    "locked": true,
+                    "num": 45
+                }
+            ],
+            "pos": {
+                "x": -1064.0,
+                "y": 1147.0
+            }
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -839.0,
+                "y": 1206.0
+            },
+            "rate": {
+                "den": 8,
+                "num": 3
+            },
+            "recipe": "Steel Pipe"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -1399.0,
+                "y": 1316.0
+            },
+            "rate": {
+                "den": 2,
+                "num": 3
+            },
+            "recipe": "Wire"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -824.0,
+                "y": 1577.0
+            },
+            "rate": {
+                "den": 6,
+                "num": 7
+            },
+            "recipe": "Quickwire"
+        },
+        {
+            "ins": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 45
+                }
+            ],
+            "item": "Wire",
+            "kind": 1,
+            "outs": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 20
+                },
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 25
+                }
+            ],
+            "pos": {
+                "x": -1046.0,
+                "y": 1314.0
+            }
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -808.0,
+                "y": 1337.0
+            },
+            "rate": {
+                "den": 12,
+                "num": 5
+            },
+            "recipe": "Cable"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -787.0,
+                "y": 1448.0
+            },
+            "rate": {
+                "den": 6,
+                "num": 1
+            },
+            "recipe": "Circuit Board"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -1365.0,
+                "y": 1462.0
+            },
+            "rate": {
+                "den": 4,
+                "num": 1
+            },
+            "recipe": "Copper Sheet"
+        },
+        {
+            "ins": [
+                {
+                    "den": 2,
+                    "locked": true,
+                    "num": 55
+                }
+            ],
+            "item": "Copper Ingot",
+            "kind": 1,
+            "outs": [
+                {
+                    "den": 2,
+                    "locked": true,
+                    "num": 45
+                },
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 5
+                }
+            ],
+            "pos": {
+                "x": -1718.0,
+                "y": 1369.0
+            }
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -2197.0,
+                "y": 1364.0
+            },
+            "rate": {
+                "den": 12,
+                "num": 11
+            },
+            "recipe": "Copper Ingot"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -1448.0,
+                "y": 1128.0
+            },
+            "rate": {
+                "den": 4,
+                "num": 9
+            },
+            "recipe": "Steel Ingot"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": 1245.0,
+                "y": 393.0
+            },
+            "rate": {
+                "den": 2,
+                "num": 5
+            },
+            "recipe": "Power (Uranium Fuel Rod)"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -1377.0,
+                "y": 1606.0
+            },
+            "rate": {
+                "den": 15,
+                "num": 14
+            },
+            "recipe": "Caterium Ingot"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -2149.0,
+                "y": 1588.0
+            },
+            "rate": {
+                "den": 4,
+                "num": 1
+            },
+            "recipe": "Plastic"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -1648.0,
+                "y": 1767.0
+            },
+            "rate": {
+                "den": 24,
+                "num": 1
+            },
+            "recipe": "Residual Fuel"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": true,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -1224.0,
+                "y": 1785.0
+            },
+            "rate": {
+                "den": 12,
+                "num": 1
+            },
+            "recipe": "Power (Fuel)"
+        },
+        {
+            "ins": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 630
+                }
+            ],
+            "item": "Water",
+            "kind": 1,
+            "outs": [
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 600
+                },
+                {
+                    "den": 1,
+                    "locked": true,
+                    "num": 30
+                }
+            ],
+            "pos": {
+                "x": -1416.0,
+                "y": 715.0
+            }
+        }
+    ],
+    "save_version": 5
+}

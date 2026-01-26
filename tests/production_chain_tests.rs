@@ -1,7 +1,8 @@
+use ficsit_companion_rs::FractionalNumber;
 use ficsit_companion_rs::game_data::GameData;
+use ficsit_companion_rs::node;
 use ficsit_companion_rs::pin::PinDirection;
 use ficsit_companion_rs::production_app::ProductionApp;
-use ficsit_companion_rs::FractionalNumber;
 
 fn load_game_data() -> GameData {
     let json = include_str!("../assets/satisfactory.json");
@@ -182,15 +183,24 @@ fn test_pin_rates_preserved_on_save_reload() {
         .expect("Failed to get craft output pin");
 
     // Set output pin rate to 10 (this updates node rate and propagates)
-    app.set_pin_rate(node_id, PinDirection::Output, 0, FractionalNumber::new(10, 1))
-        .expect("Failed to set pin rate");
+    app.set_pin_rate(
+        node_id,
+        PinDirection::Output,
+        0,
+        FractionalNumber::new(10, 1),
+    )
+    .expect("Failed to set pin rate");
 
     // Verify current rate before save
     let (_ins, outs) = app
         .get_node_pin_rates(node_id)
         .expect("Failed to get pin rates");
     let before = outs[0].as_ref().expect("Output rate should be Some");
-    assert!(before == "10" || before == "10/1", "Unexpected rate before save: {}", before);
+    assert!(
+        before == "10" || before == "10/1",
+        "Unexpected rate before save: {}",
+        before
+    );
 
     // Save and reload
     let saved = app.save_to_json().expect("Failed to save");
@@ -216,8 +226,14 @@ fn test_pin_rates_preserved_on_save_reload() {
     let (_rins, routs) = app2
         .get_node_pin_rates(rnode)
         .expect("Failed to get pin rates after reload");
-    let after = routs[0].as_ref().expect("Output rate should be Some after reload");
-    assert!(after == "10" || after == "10/1", "Rate not preserved after reload: {}", after);
+    let after = routs[0]
+        .as_ref()
+        .expect("Output rate should be Some after reload");
+    assert!(
+        after == "10" || after == "10/1",
+        "Rate not preserved after reload: {}",
+        after
+    );
 }
 
 #[test]
@@ -233,7 +249,9 @@ fn test_merger_splitter_import_compatibility() {
     // Node index 9 in the file is the Merger (kind=2)
     let merger_node_id = app.find_node_by_index(9).expect("Merger node missing");
     // Merger should have 2 inputs and 1 output
-    let (ins, outs) = app.get_node_pin_rates(merger_node_id).expect("Failed to get merger pin rates");
+    let (ins, outs) = app
+        .get_node_pin_rates(merger_node_id)
+        .expect("Failed to get merger pin rates");
     assert_eq!(ins.len(), 2, "Merger should have 2 inputs");
     assert_eq!(outs.len(), 1, "Merger should have 1 output");
 
@@ -244,7 +262,9 @@ fn test_merger_splitter_import_compatibility() {
 
     // Node index 10 is a CustomSplitter (kind=1) with 1 input, 3 outputs
     let splitter_node_id = app.find_node_by_index(10).expect("Splitter node missing");
-    let (s_ins, s_outs) = app.get_node_pin_rates(splitter_node_id).expect("Failed to get splitter pin rates");
+    let (s_ins, s_outs) = app
+        .get_node_pin_rates(splitter_node_id)
+        .expect("Failed to get splitter pin rates");
     assert_eq!(s_ins.len(), 1, "Splitter should have 1 input");
     assert_eq!(s_outs.len(), 3, "Splitter should have 3 outputs");
 
@@ -255,6 +275,88 @@ fn test_merger_splitter_import_compatibility() {
 }
 
 #[test]
+fn test_organizer_ins_outs_saved() {
+    let mut app = ProductionApp::new();
+
+    // Create a merger and set its item name so pins have item metadata
+    let merger_id = app.add_merger_node();
+    app.set_node_item_name(merger_id, Some("Iron Ore".to_string()))
+        .expect("Failed to set item name");
+
+    // Lock the first input pin (isolated node -> only that pin gets locked)
+    let in_pin_id = app
+        .get_pin_id(merger_id, PinDirection::Input, 0)
+        .expect("Failed to get input pin");
+    app.set_pin_locked(in_pin_id, true)
+        .expect("Failed to lock pin");
+
+    // Save to JSON and inspect serialized structure
+    let saved = app.save_to_json().expect("Failed to save");
+    let file: ficsit_companion_rs::serialization::ProductionChainFile =
+        serde_json::from_str(&saved).expect("Failed to parse saved JSON");
+
+    // Find the organizer node we created in the saved file
+    let maybe_org = file.nodes.iter().find_map(|node| {
+        if let ficsit_companion_rs::serialization::SerializedNode::Organizer(org) = node {
+            Some(org)
+        } else {
+            None
+        }
+    });
+
+    let org = maybe_org.expect("No organizer node found in saved file");
+    assert!(org.ins.is_some(), "Expected ins to be emitted");
+    assert!(org.outs.is_some(), "Expected outs to be emitted");
+
+    let ins = org.ins.as_ref().unwrap();
+    let outs = org.outs.as_ref().unwrap();
+    assert_eq!(ins.len(), 2, "Expected 2 input entries");
+    assert_eq!(outs.len(), 1, "Expected 1 output entry");
+
+    // First input should have item "Iron Ore" and be locked
+    assert_eq!(ins[0].item.as_ref().unwrap(), "Iron Ore");
+    assert!(ins[0].locked, "First input should be locked");
+
+    // Outputs should have item name set but not locked
+    assert_eq!(outs[0].item.as_ref().unwrap(), "Iron Ore");
+    assert!(!outs[0].locked, "Output should not be locked");
+}
+
+#[test]
+fn test_organizer_item_propagates_to_pins_on_load() {
+    // Create a saved file which specifies the organizer item but not explicit ins/outs
+    let json = r#"{
+        "game_version": "1.0",
+        "save_version": 5,
+        "nodes": [
+            { "kind": 2, "pos": { "x": 0.0, "y": 0.0 }, "item": "Sulfur" }
+        ],
+        "links": []
+    }"#;
+
+    let mut app = ProductionApp::new();
+    app.load_from_json(json, None).expect("Failed to load");
+
+    // After load, organizer should have default pins and item propagated to pin names
+    let node_index = 0;
+    let node_id = app.nodes[node_index]
+        .downcast_ref::<node::OrganizerNode>()
+        .unwrap()
+        .base
+        .id;
+    let (ins, outs) = app
+        .get_node_pin_item_names(node_id)
+        .expect("Expected pin names");
+    assert!(
+        ins.iter()
+            .all(|n| n.as_ref().map(|s| s == "Sulfur").unwrap_or(false))
+    );
+    assert!(
+        outs.iter()
+            .all(|n| n.as_ref().map(|s| s == "Sulfur").unwrap_or(false))
+    );
+}
+
 fn test_power_generator_detection() {
     let game_data = load_game_data();
     let mut app = ProductionApp::new();

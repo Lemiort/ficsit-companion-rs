@@ -1,13 +1,15 @@
 use crate::fractional_number::FractionalNumber;
 use serde::{Deserialize, Serialize};
 
+type ItemName = String;
+
 /// Represents a pin (input/output point) on a node
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pin {
     pub id: u64,
     pub direction: PinDirection,
     pub node_id: u64, // ID of the node this pin belongs to
-    pub item_name: Option<String>,
+    pub item_name: Option<ItemName>,
     pub base_rate: FractionalNumber,
     pub current_rate: FractionalNumber,
     pub locked: bool,
@@ -28,7 +30,7 @@ impl Pin {
         id: u64,
         direction: PinDirection,
         node_id: u64,
-        item_name: Option<String>,
+        item_name: Option<ItemName>,
         locked: bool,
         base_rate: FractionalNumber,
     ) -> Self {
