@@ -63,6 +63,9 @@ struct SnarlViewer {
     // UI-only locked nodes set (visual lock toggled by right-click on node header)
     ui_locked_nodes: std::collections::HashSet<u64>,
 
+    // Buffer for temporary locks created by auto-wiring so we can restore original state later
+    temporary_locks: Vec<TemporaryLock>,
+
     // Recent pin edit successes (node_id, direction, pin_idx) -> Instant
     pub pin_success: std::collections::HashMap<(u64, PinDirection, usize), std::time::Instant>,
 
@@ -102,6 +105,18 @@ pub struct PendingDroppedWire {
     pub src_item_name: Option<String>,
     pub choice: DroppedWireChoice,
 }
+
+#[derive(Clone, Debug)]
+struct TemporaryLock {
+    pub node_id: u64,
+    pub direction: Option<PinDirection>,
+    pub pin_index: Option<usize>,
+    pub is_node: bool,
+    /// Snapshot of pin ids that were locked before we applied the temporary lock
+    pub locked_snapshot: Vec<u64>,
+    /// Nodes affected/marked visually locked when we applied the temporary lock
+    pub affected_nodes: Vec<u64>,
+}  
 
 impl SnarlViewer {
     // Fixed inset before the footer '+' (used for both input and output placements)
@@ -302,6 +317,11 @@ impl SnarlViewer {
 
     fn drain_pending_dropped_wire(&mut self) -> Option<PendingDroppedWire> {
         self.pending_dropped_wire.take()
+    }
+
+    /// Drain and return any temporary locks scheduled by the viewer (auto-wiring)
+    fn drain_temporary_locks(&mut self) -> Vec<TemporaryLock> {
+        std::mem::take(&mut self.temporary_locks)
     }
 
     /// Rebuild the node display cache from ProductionApp.
@@ -2228,6 +2248,8 @@ impl Default for TemplateApp {
                 pending_changes: Vec::new(),
                 pending_dropped_wire: None,
                 ui_locked_nodes: std::collections::HashSet::new(),
+                // Temporary locks recorded during auto-wiring to be restored later
+                temporary_locks: Vec::new(),
                 pin_success: std::collections::HashMap::new(),
                 icon_map: std::collections::HashMap::new(),
                 recipes: Vec::new(),
@@ -3001,6 +3023,93 @@ impl TemplateApp {
                             }
                         }
 
+                        // Before we connect, temporarily lock the original source so propagation treats it as constant
+                        // We'll restore the previous lock state after connection by scheduling an unlock pending change.
+                        if let Some(src_node) = app.snarl.get_node(out.node) {
+                            let src_prod = src_node.id;
+                            // If the source is a Craft node, lock the whole node temporarily
+                            if matches!(app.production_app.get_node_kind(src_prod), Some(crate::node::NodeKind::Craft)) {
+                                // Check if node already has any locked pins
+                                let already_locked = app
+                                    .production_app
+                                    .get_node_pin_locked_flags(src_prod)
+                                    .map(|(ins, outs)| ins.iter().any(|b| *b) || outs.iter().any(|b| *b))
+                                    .unwrap_or(false);
+                                if !already_locked {
+                                    match app.production_app.set_node_locked_and_get_affected(src_prod, true) {
+                                        Ok(affected) => {
+                                            // Update UI lock hints
+                                            app.snarl_viewer.ui_locked_nodes.insert(src_prod);
+                                            for nid in &affected { app.snarl_viewer.ui_locked_nodes.insert(*nid); }
+                                            // Snapshot all connected pins and record which were locked before
+                                            let connected_pins = app.production_app.get_all_connected_pins_for_node(src_prod);
+                                            let mut locked_snapshot: Vec<u64> = Vec::new();
+                                            for pid in connected_pins.iter() {
+                                                if let Some((n,d,i)) = app.production_app.find_pin_location(*pid) {
+                                                    if let Some((ins_locked, outs_locked)) = app.production_app.get_node_pin_locked_flags(n) {
+                                                        let locked = match d {
+                                                            PinDirection::Input => ins_locked.get(i).copied().unwrap_or(false),
+                                                            PinDirection::Output => outs_locked.get(i).copied().unwrap_or(false),
+                                                        };
+                                                        if locked { locked_snapshot.push(*pid); }
+                                                    }
+                                                }
+                                            }
+                                            // Record affected nodes so we can clear visual lock hints on restore
+                                            let affected_nodes_vec = affected.clone();
+                                            app.snarl_viewer.temporary_locks.push(TemporaryLock { node_id: src_prod, direction: None, pin_index: None, is_node: true, locked_snapshot, affected_nodes: affected_nodes_vec });
+                                            log::info!("[AUTO-WIRE] recorded temporary node lock (snapshot): node={}", src_prod);
+                                        }
+                                        Err(e) => {
+                                            app.emit_message(format!("Error locking source node: {}", e), log::Level::Error);
+                                        }
+                                    }
+                                }
+                            } else {
+                                if let Some(pinid) = app.production_app.get_pin_id(src_prod, PinDirection::Output, out.output) {
+                                    // Check if this output is already locked
+                                    let already_locked = app
+                                        .production_app
+                                        .get_node_pin_locked_flags(src_prod)
+                                        .map(|(_ins, outs)| outs.get(out.output).copied().unwrap_or(false))
+                                        .unwrap_or(false);
+                                    if !already_locked {
+                                        if let Err(e) = app.production_app.set_pin_locked(pinid, true) {
+                                            app.emit_message(format!("Error locking source pin: {}", e), log::Level::Error);
+                                        } else {
+                                            app.snarl_viewer.ui_locked_nodes.insert(src_prod);
+                                            // Snapshot connected component for this pin and record which pins were locked before
+                                            if let Some(pinid) = app.production_app.get_pin_id(src_prod, PinDirection::Output, out.output) {
+                                                let connected = app.production_app.get_connected_pins(pinid);
+                                                let mut locked_snapshot: Vec<u64> = Vec::new();
+                                                for pid in connected.iter() {
+                                                    if let Some((n,d,i)) = app.production_app.find_pin_location(*pid) {
+                                                        if let Some((ins_locked, outs_locked)) = app.production_app.get_node_pin_locked_flags(n) {
+                                                            let locked = match d {
+                                                                PinDirection::Input => ins_locked.get(i).copied().unwrap_or(false),
+                                                                PinDirection::Output => outs_locked.get(i).copied().unwrap_or(false),
+                                                            };
+                                                            if locked { locked_snapshot.push(*pid); }
+                                                        }
+                                                    }
+                                                }
+                                                // Record affected nodes and snapshot so we can restore visual locks later
+                                                let mut affected_nodes_set: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                                                for pid in connected.iter() {
+                                                    if let Some((n, _d, _i)) = app.production_app.find_pin_location(*pid) {
+                                                        affected_nodes_set.insert(n);
+                                                    }
+                                                }
+                                                let affected_nodes_vec: Vec<u64> = affected_nodes_set.into_iter().collect();
+                                                app.snarl_viewer.temporary_locks.push(TemporaryLock { node_id: src_prod, direction: Some(PinDirection::Output), pin_index: Some(out.output), is_node: false, locked_snapshot, affected_nodes: affected_nodes_vec });
+                                                log::info!("[AUTO-WIRE] recorded temporary pin lock (snapshot): node={} out_idx={}", src_prod, out.output);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // Finally connect (visual)
                         let _ = app.snarl.connect(*out, dest);
                         // And schedule production link creation so core model is updated
@@ -3069,6 +3178,88 @@ impl TemplateApp {
                                 let _ = app.snarl.disconnect(*r, *inp);
                                 // Schedule production link removal
                                 app.snarl_viewer.pending_changes.push(PendingChange::disconnect(*r, *inp));
+                            }
+                        }
+
+                        // Before connecting, temporarily lock the original source pin (the inp) so propagation treats its value as constant
+                        // We'll restore the previous lock state after connection by scheduling an unlock pending change.
+                        if let Some(src_node) = app.snarl.get_node(inp.node) {
+                            let src_prod = src_node.id;
+                            if matches!(app.production_app.get_node_kind(src_prod), Some(crate::node::NodeKind::Craft)) {
+                                // Check if node already has any locked pins
+                                let already_locked = app
+                                    .production_app
+                                    .get_node_pin_locked_flags(src_prod)
+                                    .map(|(ins, outs)| ins.iter().any(|b| *b) || outs.iter().any(|b| *b))
+                                    .unwrap_or(false);
+                                if !already_locked {
+                                    match app.production_app.set_node_locked_and_get_affected(src_prod, true) {
+                                        Ok(affected) => {
+                                            app.snarl_viewer.ui_locked_nodes.insert(src_prod);
+                                            for nid in &affected { app.snarl_viewer.ui_locked_nodes.insert(*nid); }
+                                            let connected_pins = app.production_app.get_all_connected_pins_for_node(src_prod);
+                                            let mut locked_snapshot: Vec<u64> = Vec::new();
+                                            for pid in connected_pins.iter() {
+                                                if let Some((n,d,i)) = app.production_app.find_pin_location(*pid) {
+                                                    if let Some((ins_locked, outs_locked)) = app.production_app.get_node_pin_locked_flags(n) {
+                                                        let locked = match d {
+                                                            PinDirection::Input => ins_locked.get(i).copied().unwrap_or(false),
+                                                            PinDirection::Output => outs_locked.get(i).copied().unwrap_or(false),
+                                                        };
+                                                        if locked { locked_snapshot.push(*pid); }
+                                                    }
+                                                }
+                                            }
+                                            let affected_nodes_vec = affected.clone();
+                                            app.snarl_viewer.temporary_locks.push(TemporaryLock { node_id: src_prod, direction: None, pin_index: None, is_node: true, locked_snapshot, affected_nodes: affected_nodes_vec });
+                                            log::info!("[AUTO-WIRE] recorded temporary node lock (snapshot): node={}", src_prod);
+                                        }
+                                        Err(e) => {
+                                            app.emit_message(format!("Error locking source node: {}", e), log::Level::Error);
+                                        }
+                                    }
+                                }
+                            } else {
+                                if let Some(pinid) = app.production_app.get_pin_id(src_prod, PinDirection::Input, inp.input) {
+                                    // Check if this input is already locked
+                                    let already_locked = app
+                                        .production_app
+                                        .get_node_pin_locked_flags(src_prod)
+                                        .map(|(ins, _outs)| ins.get(inp.input).copied().unwrap_or(false))
+                                        .unwrap_or(false);
+                                    if !already_locked {
+                                        if let Err(e) = app.production_app.set_pin_locked(pinid, true) {
+                                            app.emit_message(format!("Error locking source pin: {}", e), log::Level::Error);
+                                        } else {
+                                            app.snarl_viewer.ui_locked_nodes.insert(src_prod);
+                                            if let Some(pinid) = app.production_app.get_pin_id(src_prod, PinDirection::Input, inp.input) {
+                                                let connected = app.production_app.get_connected_pins(pinid);
+                                                let mut locked_snapshot: Vec<u64> = Vec::new();
+                                                for pid in connected.iter() {
+                                                    if let Some((n,d,i)) = app.production_app.find_pin_location(*pid) {
+                                                        if let Some((ins_locked, outs_locked)) = app.production_app.get_node_pin_locked_flags(n) {
+                                                            let locked = match d {
+                                                                PinDirection::Input => ins_locked.get(i).copied().unwrap_or(false),
+                                                                PinDirection::Output => outs_locked.get(i).copied().unwrap_or(false),
+                                                            };
+                                                            if locked { locked_snapshot.push(*pid); }
+                                                        }
+                                                    }
+                                                }
+                                                // Record affected nodes for this pin's connected component
+                                                let mut affected_nodes_set: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                                                for pid in connected.iter() {
+                                                    if let Some((n, _d, _i)) = app.production_app.find_pin_location(*pid) {
+                                                        affected_nodes_set.insert(n);
+                                                    }
+                                                }
+                                                let affected_nodes_vec: Vec<u64> = affected_nodes_set.into_iter().collect();
+                                                app.snarl_viewer.temporary_locks.push(TemporaryLock { node_id: src_prod, direction: Some(PinDirection::Input), pin_index: Some(inp.input), is_node: false, locked_snapshot, affected_nodes: affected_nodes_vec });
+                                                log::info!("[AUTO-WIRE] recorded temporary pin lock (snapshot): node={} in_idx={}", src_prod, inp.input);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -3927,6 +4118,74 @@ impl TemplateApp {
                 } else {
                     self.emit_message("Could not find pin to lock".to_string(), log::Level::Error);
                 }
+            }
+
+            // Restore any temporary locks recorded by auto-wiring
+            // Collect pins to unlock to avoid double-unlock and duplicate refreshes
+            let mut pins_to_unlock: std::collections::HashSet<u64> = std::collections::HashSet::new();
+            // Nodes that we visually marked locked when applying temp locks
+            let mut visual_nodes_to_clear: std::collections::HashSet<u64> = std::collections::HashSet::new();
+            for t in self.snarl_viewer.drain_temporary_locks() {
+                // Remember nodes we visually locked
+                for nid in &t.affected_nodes { visual_nodes_to_clear.insert(*nid); }
+
+                if t.is_node {
+                    // Recompute connected pins for the node after propagation
+                    let connected = self.production_app.get_all_connected_pins_for_node(t.node_id);
+                    for pid in connected {
+                        // If this pin was unlocked before and is locked now, schedule unlock
+                        if !t.locked_snapshot.contains(&pid) {
+                            if let Some((n, d, i)) = self.production_app.find_pin_location(pid) {
+                                if let Some((ins_locked, outs_locked)) = self.production_app.get_node_pin_locked_flags(n) {
+                                    let currently_locked = match d {
+                                        PinDirection::Input => ins_locked.get(i).copied().unwrap_or(false),
+                                        PinDirection::Output => outs_locked.get(i).copied().unwrap_or(false),
+                                    };
+                                    if currently_locked { pins_to_unlock.insert(pid); }
+                                }
+                            }
+                        }
+                    }
+                } else if let (Some(dir), Some(idx)) = (t.direction, t.pin_index) {
+                    if let Some(pin_id) = self.production_app.get_pin_id(t.node_id, dir, idx) {
+                        let connected = self.production_app.get_connected_pins(pin_id);
+                        for pid in connected {
+                            if !t.locked_snapshot.contains(&pid) {
+                                if let Some((n, d, i)) = self.production_app.find_pin_location(pid) {
+                                    if let Some((ins_locked, outs_locked)) = self.production_app.get_node_pin_locked_flags(n) {
+                                        let currently_locked = match d {
+                                            PinDirection::Input => ins_locked.get(i).copied().unwrap_or(false),
+                                            PinDirection::Output => outs_locked.get(i).copied().unwrap_or(false),
+                                        };
+                                        if currently_locked { pins_to_unlock.insert(pid); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Perform unlocks and update UI state / refresh lists
+            let mut affected_nodes_for_unlock: std::collections::HashSet<u64> = std::collections::HashSet::new();
+            for pid in pins_to_unlock.into_iter() {
+                if let Some((nid, _d, _i)) = self.production_app.find_pin_location(pid) {
+                    if let Err(e) = self.production_app.set_pin_locked(pid, false) {
+                        self.emit_message(format!("Error restoring pin lock state: {}", e), log::Level::Error);
+                    } else {
+                        affected_nodes_for_unlock.insert(nid);
+                    }
+                }
+            }
+            for nid in affected_nodes_for_unlock.into_iter() {
+                self.snarl_viewer.ui_locked_nodes.remove(&nid);
+                nodes_to_refresh.push(nid);
+            }
+
+            // Also clear any visual locks we set when applying the temporary lock
+            for nid in visual_nodes_to_clear.into_iter() {
+                self.snarl_viewer.ui_locked_nodes.remove(&nid);
+                nodes_to_refresh.push(nid);
             }
 
             // After mutations, update edit buffers so UI input fields reflect the new rates immediately

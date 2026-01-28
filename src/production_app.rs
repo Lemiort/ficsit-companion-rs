@@ -1642,6 +1642,37 @@ impl ProductionApp {
         Ok(())
     }
 
+    /// Set a single pin's locked state without affecting connected pins.
+    /// This is used to revert locks that were introduced by propagation only on a specific pin.
+    pub fn set_pin_locked_single(&mut self, pin_id: u64, locked: bool) -> Result<(), String> {
+        if let Some((node_id, direction, idx)) = self.find_pin_location(pin_id) {
+            let ni = self.find_node_index(node_id).ok_or("Node not found")?;
+            if let Some(n) = self.nodes[ni].downcast_mut::<CraftNode>() {
+                match direction {
+                    PinDirection::Input => n.base.ins[idx].locked = locked,
+                    PinDirection::Output => n.base.outs[idx].locked = locked,
+                }
+                return Ok(());
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                match direction {
+                    PinDirection::Input => n.base.ins[idx].locked = locked,
+                    PinDirection::Output => n.base.outs[idx].locked = locked,
+                }
+                return Ok(());
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<GroupNode>() {
+                match direction {
+                    PinDirection::Input => n.base.ins[idx].locked = locked,
+                    PinDirection::Output => n.base.outs[idx].locked = locked,
+                }
+                return Ok(());
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+                n.base.ins[idx].locked = locked;
+                return Ok(());
+            }
+        }
+        Err("Pin not found".to_string())
+    }
+
     /// Auto-lock pins on Merger/CustomSplitter nodes when the solution becomes unique.
     /// For Merger: if output is locked and only one input is unlocked, lock that input.
     /// For CustomSplitter: if input is locked and only one output is unlocked, lock that output.
