@@ -391,6 +391,22 @@ impl ProductionApp {
         Err("Node is not an organizer".into())
     }
 
+    /// Set the item for a sink node input pin
+    pub fn set_sink_pin_item(&mut self, node_id: u64, pin_index: usize, item: Option<String>) -> Result<(), String> {
+        let idx = self
+            .find_node_index(node_id)
+            .ok_or_else(|| format!("Node {} not found", node_id))?;
+        let node_any = &mut self.nodes[idx];
+        if let Some(n) = node_any.downcast_mut::<SinkNode>() {
+            if pin_index >= n.base.ins.len() {
+                return Err("Input pin out of range".into());
+            }
+            n.base.ins[pin_index].item_name = item;
+            return Ok(());
+        }
+        Err("Node is not a sink".into())
+    }
+
     /// Get organizer node item name
     pub fn get_node_item_name(&self, node_id: u64) -> Option<String> {
         let idx = self.find_node_index(node_id)?;
@@ -1963,12 +1979,9 @@ impl ProductionApp {
                                 }
                             }
                         } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
-                            log::trace!("[GCP] node {} is SinkNode, adding input pins", node_id);
-                            for p in n.base.ins.iter() {
-                                if visited_pins.insert(p.id) {
-                                    queue.push_back(p.id);
-                                }
-                            }
+                            log::trace!("[GCP] node {} is SinkNode, NOT adding other pins (treat inputs as independent)", node_id);
+                        // Do not add other sink input pins: sink inputs are independent and should
+                        // not be considered connected merely because they share the same node.
                         }
                     }
                 }

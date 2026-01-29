@@ -357,6 +357,37 @@ fn test_organizer_item_propagates_to_pins_on_load() {
     );
 }
 
+#[test]
+fn test_lock_sink_input_pin() {
+    let mut app = ProductionApp::new();
+
+    // Create a sink node and verify initial lock state is unlocked
+    let sink_id = app.add_sink_node();
+
+    // Add a second input so we have two independent pins
+    app.add_input_pin_to_node(sink_id).expect("Failed to add second sink input");
+
+    let (ins_locked, _outs_locked) = app
+        .get_node_pin_locked_flags(sink_id)
+        .expect("Failed to get locked flags for sink");
+    assert_eq!(ins_locked.len(), 2);
+    assert!(!ins_locked[0], "Sink input 0 should initially be unlocked");
+    assert!(!ins_locked[1], "Sink input 1 should initially be unlocked");
+
+    // Lock the first sink input pin (simulate UI pin lock)
+    let pin0_id = app
+        .get_pin_id(sink_id, PinDirection::Input, 0)
+        .expect("Failed to get sink input pin 0 id");
+    app.set_pin_locked(pin0_id, true).expect("Failed to set pin locked");
+
+    let (ins_locked_after, _outs_locked_after) = app
+        .get_node_pin_locked_flags(sink_id)
+        .expect("Failed to get locked flags for sink after lock");
+    // First pin should be locked, second should remain unlocked
+    assert!(ins_locked_after[0], "Sink input 0 should be locked after set_pin_locked");
+    assert!(!ins_locked_after[1], "Sink input 1 should remain unlocked when locking pin 0");
+}
+
 fn test_power_generator_detection() {
     let game_data = load_game_data();
     let mut app = ProductionApp::new();

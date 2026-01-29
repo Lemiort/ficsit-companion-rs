@@ -295,6 +295,21 @@ impl SnarlViewer {
         result
     }
 
+    fn drain_pending_sink_pin_items(&mut self) -> Vec<(u64, usize, Option<String>)> {
+        let mut result = Vec::new();
+        let mut remaining = Vec::new();
+        for change in std::mem::take(&mut self.pending_changes) {
+            match change {
+                PendingChange::SinkPinItem { node_id, pin_idx, item } => {
+                    result.push((node_id, pin_idx, item));
+                }
+                other => remaining.push(other),
+            }
+        }
+        self.pending_changes = remaining;
+        result
+    }
+
     fn drain_pending_pin_lock_changes(&mut self) -> Vec<(u64, PinDirection, usize, bool)> {
         let mut result = Vec::new();
         let mut remaining = Vec::new();
@@ -1399,27 +1414,17 @@ impl SnarlViewer {
             .spacing([8.0, 8.0])
             .min_col_width(ui.available_width() / 3.0)
             .show(ui, |ui| {
-                // Show item_type if present, otherwise show points
-                if let Some(item) = sink.item_type.as_ref() {
-                    ui.horizontal(|ui| {
-                        let icon_size =
-                            egui::vec2(ui.spacing().interact_size.y, ui.spacing().interact_size.y);
-                        ui.image((item.icon, icon_size));
-                        ui.add_space(6.0);
-                        ui.label(item.name.clone());
-                    });
-                } else {
-                    ui.horizontal(|ui| {
-                        let mut points_str = sink.sink_points.to_float_string();
-                        let text_edit =
-                            egui::TextEdit::singleline(&mut points_str).desired_width(44.0);
-                        let response = ui.add_enabled(false, text_edit);
-                        if response.hovered() {
-                            response.on_hover_text(&sink.sink_points_fraction_str);
-                        }
-                        ui.label("points");
-                    });
-                }
+                // show points
+                ui.horizontal(|ui| {
+                    let mut points_str = sink.sink_points.to_float_string();
+                    let text_edit =
+                        egui::TextEdit::singleline(&mut points_str).desired_width(44.0);
+                    let response = ui.add_enabled(false, text_edit);
+                    if response.hovered() {
+                        response.on_hover_text(&sink.sink_points_fraction_str);
+                    }
+                    ui.label("points");
+                });
                 ui.horizontal(|_ui| {});
                 ui.horizontal(|_ui| {});
                 ui.end_row();
@@ -1582,8 +1587,10 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                             );
                         }
 
-                        // Lock button for merger and custom splitter pins
-                        if ntype == GraphNodeType::Merger || ntype == GraphNodeType::CustomSplitter
+                        // Lock button for merger, custom splitter, and sink pins
+                        if ntype == GraphNodeType::Merger
+                            || ntype == GraphNodeType::CustomSplitter
+                            || ntype == GraphNodeType::Sink
                         {
                             let lock_icon = if pin_locked { "🔒" } else { "🔓" };
                             let lock_btn = egui::Button::new(lock_icon)
@@ -4094,6 +4101,19 @@ impl TemplateApp {
                         log::debug!("[UI] applied set_node_item_name: node={} item={:?}", node_id, item_opt);
                         // Schedule refresh so the node UI updates from production
                         // The item_type will come from the rebuilt cache
+                        nodes_to_refresh.push(node_id);
+                    }
+                    Err(e) => {
+                        self.emit_message(format!("Error: {}", e), log::Level::Error);
+                    }
+                }
+            }
+
+            // Process pending sink pin item assignments requested by the viewer (per-input pin on Sink nodes)
+            for (node_id, pin_idx, item_opt) in self.snarl_viewer.drain_pending_sink_pin_items() {
+                match self.production_app.set_sink_pin_item(node_id, pin_idx, item_opt.clone()) {
+                    Ok(()) => {
+                        log::debug!("[UI] applied set_sink_pin_item: node={} pin={} item={:?}", node_id, pin_idx, item_opt);
                         nodes_to_refresh.push(node_id);
                     }
                     Err(e) => {
