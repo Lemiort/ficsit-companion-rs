@@ -116,7 +116,7 @@ struct TemporaryLock {
     pub locked_snapshot: Vec<u64>,
     /// Nodes affected/marked visually locked when we applied the temporary lock
     pub affected_nodes: Vec<u64>,
-}  
+}
 
 impl SnarlViewer {
     // Fixed inset before the footer '+' (used for both input and output placements)
@@ -300,7 +300,11 @@ impl SnarlViewer {
         let mut remaining = Vec::new();
         for change in std::mem::take(&mut self.pending_changes) {
             match change {
-                PendingChange::SinkPinItem { node_id, pin_idx, item } => {
+                PendingChange::SinkPinItem {
+                    node_id,
+                    pin_idx,
+                    item,
+                } => {
                     result.push((node_id, pin_idx, item));
                 }
                 other => remaining.push(other),
@@ -1091,7 +1095,8 @@ impl SnarlViewer {
                     .and_then(|c| c.item_data().map(|i| i.name.clone()));
                 if chosen.is_some() {
                     if current_name != chosen {
-                        self.pending_changes.push(PendingChange::item(node_display_id, chosen.clone()));
+                        self.pending_changes
+                            .push(PendingChange::item(node_display_id, chosen.clone()));
                     }
                 }
             }
@@ -1417,8 +1422,7 @@ impl SnarlViewer {
                 // show points
                 ui.horizontal(|ui| {
                     let mut points_str = sink.sink_points.to_float_string();
-                    let text_edit =
-                        egui::TextEdit::singleline(&mut points_str).desired_width(44.0);
+                    let text_edit = egui::TextEdit::singleline(&mut points_str).desired_width(44.0);
                     let response = ui.add_enabled(false, text_edit);
                     if response.hovered() {
                         response.on_hover_text(&sink.sink_points_fraction_str);

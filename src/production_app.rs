@@ -392,7 +392,12 @@ impl ProductionApp {
     }
 
     /// Set the item for a sink node input pin
-    pub fn set_sink_pin_item(&mut self, node_id: u64, pin_index: usize, item: Option<String>) -> Result<(), String> {
+    pub fn set_sink_pin_item(
+        &mut self,
+        node_id: u64,
+        pin_index: usize,
+        item: Option<String>,
+    ) -> Result<(), String> {
         let idx = self
             .find_node_index(node_id)
             .ok_or_else(|| format!("Node {} not found", node_id))?;
@@ -1979,9 +1984,12 @@ impl ProductionApp {
                                 }
                             }
                         } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
-                            log::trace!("[GCP] node {} is SinkNode, NOT adding other pins (treat inputs as independent)", node_id);
-                        // Do not add other sink input pins: sink inputs are independent and should
-                        // not be considered connected merely because they share the same node.
+                            log::trace!(
+                                "[GCP] node {} is SinkNode, NOT adding other pins (treat inputs as independent)",
+                                node_id
+                            );
+                            // Do not add other sink input pins: sink inputs are independent and should
+                            // not be considered connected merely because they share the same node.
                         }
                     }
                 }
