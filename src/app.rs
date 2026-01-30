@@ -2955,7 +2955,100 @@ impl TemplateApp {
                         }
                     // !TODO: Show expandable power consumption with details per building type
                     self.separator_text_left(ui, "Sink Points");
-                    // !TODO: Show expandable points breakdown by item type
+                    // Compute total sink points and per-item breakdown
+                    let mut total_sink_points = FractionalNumber::default();
+                    let mut detailed_sink_points: std::collections::HashMap<String, FractionalNumber> = std::collections::HashMap::new();
+
+                    for node_any in &self.production_app.nodes {
+                        if let Some(n) = node_any.downcast_ref::<crate::node::SinkNode>() {
+                            for p in &n.base.ins {
+                                if let Some(ref item_name) = p.item_name {
+                                    if let Some(item_rc) = self.game_data.items.get(item_name.as_str()) {
+                                        let pts = p.current_rate.clone() * FractionalNumber::from(item_rc.sink_value as i64);
+                                        total_sink_points += pts.clone();
+                                        detailed_sink_points
+                                            .entry(item_name.clone())
+                                            .and_modify(|v| *v += pts.clone())
+                                            .or_insert(pts);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // If there are no Sink nodes at all, show a short message. If Sink nodes exist, show the section
+                    // even when the total is zero (so the user sees the section / 0.00 total).
+                    let any_sinks = self.production_app.nodes.iter().any(|n_any| n_any.downcast_ref::<crate::node::SinkNode>().is_some());
+                    if any_sinks {
+                        // Sort items by points descending
+                        let mut sorted: Vec<(String, FractionalNumber)> = detailed_sink_points.into_iter().collect();
+                        sorted.sort_by(|a, b| {
+                            b.1.value()
+                                .partial_cmp(&a.1.value())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+
+                        let sink_points_width = ui
+                            .painter()
+                            .layout_no_wrap("00000000.00".to_owned(), egui::FontId::default(), egui::Color32::WHITE)
+                            .size()
+                            .x;
+
+                        let id = ui.make_persistent_id("sink_points");
+                        let spacing_width = ui.spacing().item_spacing.x;
+                        let header_result = egui::collapsing_header::CollapsingState::load_with_default_open(
+                            ui.ctx(),
+                            id,
+                            false,
+                        )
+                        .show_header(ui, |ui| {
+                             egui::Grid::new("sink_points_header_grid")
+                                .num_columns(2)
+                                .min_col_width(sink_points_width)
+                                .show(ui, |ui| {
+                                // Show total sink points on the right (even if zero)
+                                //ui.add(egui::Label::new(total_sink_points.to_float_string()));
+                                ui.horizontal(|ui| {
+                                let mut pts_str = total_sink_points.to_float_string();
+                                let txt = egui::TextEdit::singleline(&mut pts_str).desired_width(sink_points_width);
+                                ui.add_enabled(false, txt);
+                                ui.label("Points");
+                                }).response.on_hover_text(&total_sink_points.to_fraction_string());
+                            });
+                        })
+                        .body(|ui| {
+                            // Header row: show column labels
+                            egui::Grid::new("sink_points_grid")
+                                .num_columns(2)
+                                .min_col_width(sink_points_width + spacing_width)
+                                .show(ui, |ui| {
+
+                                    for (name, pts) in sorted.iter() {
+                                        // left column: add a small tab/indent and then read-only points text
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(spacing_width);
+                                            let mut pts_str = pts.to_float_string();
+                                            let txt = egui::TextEdit::singleline(&mut pts_str).desired_width(sink_points_width);
+                                            ui.add_enabled(false, txt);
+                                        }).response.on_hover_text(&pts.to_fraction_string());
+
+                                        // right column: small item icon (if available) + name
+                                        ui.horizontal(|ui| {
+                                            if let Some(h) = self.item_icon_cache.get(name) {
+                                                ui.add(egui::Image::new((h.id(), egui::vec2(18.0, 18.0))));
+                                            } else {
+                                                ui.add_space(18.0);
+                                            }
+                                            ui.label(name).on_hover_text(name);
+                                        });
+
+                                        
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                        // we don't need the returned open state for now
+                    }
                     self.separator_text_left(ui, "Machines");
                     // !TODO: Show expandable list of machines with recipes detailizations
                     self.separator_text_left(ui, "Inputs");
