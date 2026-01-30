@@ -194,4 +194,36 @@ fn test_nuclear_plant_load_and_file_consistency() {
         .get_node_item_name(merger_nid)
         .expect("Merger node item missing in app");
     assert_eq!(merger_item, "Sulfuric Acid", "Merger node item mismatch");
+
+    // Sanity check: ensure power-generating craft nodes have negative power and non-zero totals
+    let mut found_power_gen = false;
+    for (idx, fnode) in file_nodes.iter().enumerate() {
+        if let Some(recipe_name) = fnode.get("recipe").and_then(|r| r.as_str()) {
+            if recipe_name.starts_with("Power (") {
+                let nid = app
+                    .find_node_by_index(idx)
+                    .expect(&format!("Power craft node {} missing", idx));
+                // Node should be marked as power generator
+                assert!(app.get_node_is_power_generator(nid), "Node {} should be a power generator", idx);
+                if let Some((same_str, last_str, _variable)) = app.get_node_power_info(nid) {
+                    // Parse as FractionalNumber and ensure non-zero (and likely negative)
+                    let same = match ficsit_companion_rs::FractionalNumber::from_string(&same_str) {
+                        Ok(v) => v,
+                        Err(e) => panic!("Failed parsing same power '{}': {}", same_str, e),
+                    };
+                    let last = match ficsit_companion_rs::FractionalNumber::from_string(&last_str) {
+                        Ok(v) => v,
+                        Err(e) => panic!("Failed parsing last power '{}': {}", last_str, e),
+                    };
+                    assert!(same.value() != 0.0 || last.value() != 0.0, "Power generator node {} reports zero power", idx);
+                    // At least one should be negative (generation)
+                    assert!(same.value() < 0.0 || last.value() < 0.0, "Power generator node {} should have negative power", idx);
+                    found_power_gen = true;
+                } else {
+                    panic!("No power info for node {}", idx);
+                }
+            }
+        }
+    }
+    assert!(found_power_gen, "No power generator found in loaded file");
 }

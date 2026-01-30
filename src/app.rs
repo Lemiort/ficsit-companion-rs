@@ -1186,10 +1186,11 @@ impl SnarlViewer {
         }
 
         ui.horizontal(|ui| {
+            // Include a leading '-' so negative values have space
             let power_field_width = ui
                 .painter()
                 .layout_no_wrap(
-                    "000000.00".to_owned(),
+                    "-000000.00".to_owned(),
                     egui::FontId::default(),
                     egui::Color32::WHITE,
                 )
@@ -2956,7 +2957,141 @@ impl TemplateApp {
                         if resp.hovered() {
                             resp.on_hover_text("If set, the power will be calculated assuming all machines in a node are set at the same clock rate\nOtherwise, it will be calculated with machines at 100% and one last machine underclocked");
                         }
-                    // !TODO: Show expandable power consumption with details per building type
+
+                    // Show expandable power breakdown (total + per-recipe) similar to Sink Points
+                    // Compute total power and per-recipe breakdown
+                    // Use ProductionApp's get_node_power_info to match node footer UI values
+                    let mut total_power = FractionalNumber::default();
+                    let mut detailed_power: std::collections::HashMap<String, FractionalNumber> = std::collections::HashMap::new();
+                    let mut any_power_nodes = false;
+                    for node_any in &self.production_app.nodes {
+                        if let Some(craft) = node_any.downcast_ref::<crate::node::CraftNode>() {
+                            any_power_nodes = true;
+                            // Prefer authoritative per-node power info from ProductionApp
+                            if let Some((same, last, _variable)) = self.production_app.get_node_power_info(craft.base.id) {
+                                let power_str = if self.power_equal_clocks { same } else { last };
+                                let power = FractionalNumber::from_string(&power_str).unwrap_or_default();
+                                total_power += power.clone();
+                                detailed_power
+                                    .entry(craft.recipe_name.clone())
+                                    .and_modify(|v| *v += power.clone())
+                                    .or_insert(power);
+                            }
+                        } else if let Some(group) = node_any.downcast_ref::<crate::node::GroupNode>() {
+                            // Include group node power as an itemized row (named by group id)
+                            any_power_nodes = true;
+                            if let Some((same, last, _variable)) = self.production_app.get_node_power_info(group.base.id) {
+                                let power_str = if self.power_equal_clocks { same } else { last };
+                                let power = FractionalNumber::from_string(&power_str).unwrap_or_default();
+                                total_power += power.clone();
+                                detailed_power
+                                    .entry(format!("Group {}", group.base.id))
+                                    .and_modify(|v| *v += power.clone())
+                                    .or_insert(power);
+                            }
+                        }
+                    }
+
+                    if any_power_nodes {
+                        // Sort items by power descending
+                        let mut sorted_power: Vec<(String, FractionalNumber)> = detailed_power.into_iter().collect();
+                        sorted_power.sort_by(|a, b| {
+                            let power_cmp = b
+                                .1
+                                .value()
+                                .partial_cmp(&a.1.value())
+                                .unwrap_or(std::cmp::Ordering::Equal);
+                            if power_cmp != std::cmp::Ordering::Equal {
+                                power_cmp
+                            } else {
+                                // Tie-breaker: reverse alphabetical (Z..A)
+                                b.0.to_lowercase().cmp(&a.0.to_lowercase())
+                            }
+                        });
+
+                        // Include a leading '-' in the sample so we account for negative values when measuring width
+                        let power_width = ui
+                            .painter()
+                            .layout_no_wrap("-000000.00".to_owned(), egui::FontId::default(), egui::Color32::WHITE)
+                            .size()
+                            .x
+                            + 8.0;
+                        let id = ui.make_persistent_id("power_breakdown");
+                        let spacing_width = ui.spacing().item_spacing.x * 2.0;
+                        let header_result = egui::collapsing_header::CollapsingState::load_with_default_open(
+                            ui.ctx(),
+                            id,
+                            false,
+                        )
+                        .show_header(ui, |ui| {
+                            egui::Grid::new("power_header_grid")
+                                .num_columns(2)
+                                .min_col_width(power_width + spacing_width)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        let mut pts_str = total_power.to_float_string();
+                                        let txt = egui::TextEdit::singleline(&mut pts_str).desired_width(power_width);
+                                        ui.add_enabled(false, txt);
+                                    }).response.on_hover_text(&total_power.to_fraction_string());
+                                    ui.label("MW");
+                                });
+                        })
+                        .body(|ui| {
+                            egui::Grid::new("power_grid")
+                                .num_columns(2)
+                                .min_col_width(power_width + spacing_width)
+                                .show(ui, |ui| {
+                                    for (name, pwr) in sorted_power.iter() {
+                                        // Left column: numeric power (read-only)
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(spacing_width);
+                                            let mut s = pwr.to_float_string();
+                                            let txt = egui::TextEdit::singleline(&mut s).desired_width(power_width);
+                                            ui.add_enabled(false, txt);
+                                            ui.label("MW");
+                                        }).response.on_hover_text(&pwr.to_fraction_string());
+
+                                        // Right column: try to render recipe-style icons with "-->" similar to context menu
+                                        ui.horizontal(|ui| {
+                                            // If this is a Group row, just show the name
+                                            if name.starts_with("Group ") {
+                                                ui.label(name).on_hover_text(name);
+                                            } else if let Some(recipe_rc) = self.game_data.recipes.iter().find(|r| r.name == *name) {
+                                                // Show all icons
+                                                for inp in recipe_rc.ins.as_slice() {
+                                                    if let Some(h) = self.item_icon_cache.get(&inp.item_name) {
+                                                        let _ = ui.add(egui::Image::new((h.id(), egui::vec2(18.0, 18.0))));
+                                                    } else {
+                                                        ui.add_space(18.0);
+                                                    }
+                                                }
+
+                                                if !recipe_rc.ins.is_empty() && !recipe_rc.outs.is_empty() {
+                                                    ui.label("-->");
+                                                }
+
+                                                // Show all icons
+                                                for out in recipe_rc.outs.as_slice() {
+                                                    if let Some(h) = self.item_icon_cache.get(&out.item_name) {
+                                                        let _ = ui.add(egui::Image::new((h.id(), egui::vec2(18.0, 18.0))));
+                                                    } else {
+                                                        ui.add_space(18.0);
+                                                    }
+                                                }
+                                                ui.label(&recipe_rc.display_name).on_hover_text(&recipe_rc.name);
+                                            } else {
+                                                // Fallback: label the row
+                                                ui.label(name).on_hover_text(name);
+                                            }
+                                        });
+
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                        // we don't need the returned open state for now
+                    }
+
                     self.separator_text_left(ui, "Sink Points");
                     // Compute total sink points and per-item breakdown
                     let mut total_sink_points = FractionalNumber::default();
@@ -2986,9 +3121,17 @@ impl TemplateApp {
                         // Sort items by points descending
                         let mut sorted: Vec<(String, FractionalNumber)> = detailed_sink_points.into_iter().collect();
                         sorted.sort_by(|a, b| {
-                            b.1.value()
+                            let pts_cmp = b
+                                .1
+                                .value()
                                 .partial_cmp(&a.1.value())
-                                .unwrap_or(std::cmp::Ordering::Equal)
+                                .unwrap_or(std::cmp::Ordering::Equal);
+                            if pts_cmp != std::cmp::Ordering::Equal {
+                                pts_cmp
+                            } else {
+                                // Tie-breaker: reverse alphabetical (Z..A)
+                                b.0.to_lowercase().cmp(&a.0.to_lowercase())
+                            }
                         });
 
                         let sink_points_width = ui

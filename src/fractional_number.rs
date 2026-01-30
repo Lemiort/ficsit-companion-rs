@@ -88,9 +88,38 @@ impl FractionalNumber {
                 continue;
             }
 
-            // If it's a digit or decimal point, parse the number
-            if c.is_numeric() || c == '.' {
+            // If it's a digit or decimal point, or a unary '-' starting a numeric literal, parse the number
+            let is_unary_minus = if c == '-' {
+                // Check next char exists and is a digit or '.'
+                let next_is_num = (i + 1) < chars.len() && (chars[i + 1].is_numeric() || chars[i + 1] == '.');
+                if !next_is_num {
+                    false
+                } else {
+                    // Determine previous non-whitespace char (if any)
+                    if i == 0 {
+                        true
+                    } else {
+                        let mut j = i as isize - 1;
+                        while j >= 0 && chars[j as usize].is_whitespace() {
+                            j -= 1;
+                        }
+                        if j < 0 {
+                            true
+                        } else {
+                            matches!(chars[j as usize], '+' | '-' | '*' | '/' | '(')
+                        }
+                    }
+                }
+            } else {
+                false
+            };
+
+            if c.is_numeric() || c == '.' || is_unary_minus {
                 let start = i;
+                // If unary minus, include the '-' sign
+                if is_unary_minus {
+                    i += 1; // include the '-'
+                }
                 while i < chars.len() && (chars[i].is_numeric() || chars[i] == '.') {
                     i += 1;
                 }
@@ -136,12 +165,10 @@ impl FractionalNumber {
         let mut values: Vec<FractionalNumber> = Vec::new();
 
         for token in postfix {
-            if token
-                .chars()
-                .next()
-                .map_or(false, |c| c.is_numeric() || c == '.')
+            let first_char = token.chars().next().unwrap();
+            if first_char.is_numeric() || first_char == '.' || (first_char == '-' && token.len() > 1 && (token.chars().nth(1).unwrap().is_numeric() || token.chars().nth(1).unwrap() == '.'))
             {
-                // Parse number
+                // Parse number (allowing a leading negative sign)
                 if let Some(slash_pos) = token.find('/') {
                     // It's a fraction possibly containing decimals in numerator/denominator
                     let num_str = &token[..slash_pos];
@@ -155,7 +182,7 @@ impl FractionalNumber {
                     }
                     values.push(num_fn / den_fn);
                 } else if let Some(dot_pos) = token.find('.') {
-                    // It's a decimal
+                    // It's a decimal (handle negative integer part correctly, e.g. "-3.5")
                     let int_part = if dot_pos == 0 {
                         0
                     } else {
@@ -168,10 +195,15 @@ impl FractionalNumber {
                     })?;
                     let decimals = (token.len() - dot_pos - 1) as u32;
                     let denominator = 10_i64.pow(decimals);
-                    let numerator = int_part * denominator + frac_part;
+                    // Preserve sign of integer part while adding fractional part magnitude
+                    let numerator = if int_part < 0 {
+                        -(int_part.abs() * denominator + frac_part)
+                    } else {
+                        int_part * denominator + frac_part
+                    };
                     values.push(FractionalNumber::new(numerator, denominator));
                 } else {
-                    // It's an integer
+                    // It's an integer (may be negative)
                     let num = token
                         .parse::<i64>()
                         .map_err(|_| format!("Invalid integer: {}", token))?;
