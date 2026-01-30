@@ -3352,12 +3352,152 @@ impl TemplateApp {
                             });
                         }
                     }
+                    // Compute item flows per user's formula:
+                    // - Inputs = sums of unconnected input pin rates
+                    // - Outputs = sums of unconnected output pin rates
+                    // - Intermediates = all produced totals (outs) minus Outputs (the external outputs)
+                    let mut produced_total: std::collections::HashMap<String, crate::fractional_number::FractionalNumber> = std::collections::HashMap::new();
+                    let mut unconnected_output_sum: std::collections::HashMap<String, crate::fractional_number::FractionalNumber> = std::collections::HashMap::new();
+                    let mut unconnected_input_sum: std::collections::HashMap<String, crate::fractional_number::FractionalNumber> = std::collections::HashMap::new();
+
+                    for node_any in &self.production_app.nodes {
+                        if let Some(craft) = node_any.downcast_ref::<crate::node::CraftNode>() {
+                            for p in craft.base.outs.iter() {
+                                if let Some(ref item_name) = p.item_name {
+                                    produced_total
+                                        .entry(item_name.clone())
+                                        .and_modify(|v| *v += p.current_rate.clone())
+                                        .or_insert(p.current_rate.clone());
+                                    if p.link_id.is_none() {
+                                        unconnected_output_sum
+                                            .entry(item_name.clone())
+                                            .and_modify(|v| *v += p.current_rate.clone())
+                                            .or_insert(p.current_rate.clone());
+                                    }
+                                }
+                            }
+                            for p in craft.base.ins.iter() {
+                                if let Some(ref item_name) = p.item_name {
+                                    if p.link_id.is_none() {
+                                        unconnected_input_sum
+                                            .entry(item_name.clone())
+                                            .and_modify(|v| *v += p.current_rate.clone())
+                                            .or_insert(p.current_rate.clone());
+                                    }
+                                }
+                            }
+                        } else if let Some(sink) = node_any.downcast_ref::<crate::node::SinkNode>() {
+                            for p in sink.base.ins.iter() {
+                                if let Some(ref item_name) = p.item_name {
+                                    if p.link_id.is_none() {
+                                        unconnected_input_sum
+                                            .entry(item_name.clone())
+                                            .and_modify(|v| *v += p.current_rate.clone())
+                                            .or_insert(p.current_rate.clone());
+                                    }
+                                }
+                            }
+                        } else if let Some(group) = node_any.downcast_ref::<crate::node::GroupNode>() {
+                            for p in group.base.outs.iter() {
+                                if let Some(ref item_name) = p.item_name {
+                                    produced_total
+                                        .entry(item_name.clone())
+                                        .and_modify(|v| *v += p.current_rate.clone())
+                                        .or_insert(p.current_rate.clone());
+                                    if p.link_id.is_none() {
+                                        unconnected_output_sum
+                                            .entry(item_name.clone())
+                                            .and_modify(|v| *v += p.current_rate.clone())
+                                            .or_insert(p.current_rate.clone());
+                                    }
+                                }
+                            }
+                            for p in group.base.ins.iter() {
+                                if let Some(ref item_name) = p.item_name {
+                                    if p.link_id.is_none() {
+                                        unconnected_input_sum
+                                            .entry(item_name.clone())
+                                            .and_modify(|v| *v += p.current_rate.clone())
+                                            .or_insert(p.current_rate.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Build category maps according to formula
+                    let mut inputs_map: std::collections::HashMap<String, crate::fractional_number::FractionalNumber> = std::collections::HashMap::new();
+                    let mut outputs_map: std::collections::HashMap<String, crate::fractional_number::FractionalNumber> = std::collections::HashMap::new();
+                    let mut intermediates_map: std::collections::HashMap<String, crate::fractional_number::FractionalNumber> = std::collections::HashMap::new();
+
+                    // Inputs = unconnected input sums
+                    for (name, v) in unconnected_input_sum.into_iter() {
+                        inputs_map.insert(name, v);
+                    }
+                    // Outputs = unconnected output sums
+                    for (name, v) in unconnected_output_sum.clone().into_iter() {
+                        outputs_map.insert(name, v);
+                    }
+                    // Intermediates = produced totals excluding any items that are external outputs
+                    for (name, v) in produced_total.into_iter() {
+                        if !outputs_map.contains_key(&name) {
+                            intermediates_map.insert(name, v);
+                        }
+                    }
+
+                    // Helper to render an item list in two columns (value | icon + name)
+                    let render_item_list = |ui: &mut egui::Ui, id_prefix: &str, map: std::collections::HashMap<String, crate::fractional_number::FractionalNumber>, empty_hint: &str| {
+                        if map.is_empty() {
+                            ui.label(empty_hint);
+                            return;
+                        }
+                        let mut items: Vec<(String, crate::fractional_number::FractionalNumber)> = map.into_iter().collect();
+                        // Sort alphabetically (case-insensitive)
+                        items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+
+                        let rate_width = ui
+                            .painter()
+                            .layout_no_wrap("0000.000".to_owned(), egui::FontId::default(), egui::Color32::WHITE)
+                            .size()
+                            .x;
+                        let spacing_width = ui.spacing().item_spacing.x * 2.0;
+
+                        egui::Grid::new(format!("{}:grid", id_prefix))
+                            .num_columns(2)
+                            .min_col_width(rate_width + spacing_width)
+                            .show(ui, |ui| {
+                                for (name, val) in items.iter() {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(spacing_width);
+                                        let mut s = val.to_float_string();
+                                        let txt = egui::TextEdit::singleline(&mut s).desired_width(rate_width);
+                                        ui.add_enabled(false, txt);
+                                    })
+                                    .response
+                                    .on_hover_text(&val.to_fraction_string());
+
+                                    ui.horizontal(|ui| {
+                                        if let Some(h) = self.item_icon_cache.get(name) {
+                                            let _ = ui.add(egui::Image::new((h.id(), egui::vec2(18.0, 18.0))));
+                                        } else {
+                                            ui.add_space(18.0);
+                                        }
+                                        ui.label(name).on_hover_text(name);
+                                    });
+
+                                    ui.end_row();
+                                }
+                            });
+                    };
+
                     self.separator_text_left(ui, "Inputs");
-                    // !TODO: show list of all inputs
+                    render_item_list(ui, "inputs", inputs_map, "(no inputs)");
+
                     self.separator_text_left(ui, "Outputs");
-                    // !TODO : show list of all outputs
+                    render_item_list(ui, "outputs", outputs_map, "(no outputs)");
+
                     self.separator_text_left(ui, "Intermediates");
-                    // !TODO : show list of all intermediates
+                    render_item_list(ui, "intermediates", intermediates_map, "(no intermediates)");
                 });
         }
     }
