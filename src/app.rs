@@ -2913,8 +2913,7 @@ impl TemplateApp {
                         .show_header(ui, |ui| {
                                 ui.add(
                                 egui::ProgressBar::new(overall)
-                                    .text(format!("{:.0}%", overall * 100.0))
-                                    .desired_width(120.0),
+                                    .text(format!("{:.0}%", overall * 100.0)),
                             );
                         })
                         .body(|ui| {
@@ -2931,8 +2930,12 @@ impl TemplateApp {
                                     for (name, total) in machines.iter() {
                                         let built = built_machines.get(name).copied().unwrap_or_default();
                                         let pct = if total.value() == 0.0 { 0.0f32 } else { (built.value() / total.value()) as f32 };
-                                        ui.label(name);
-                                        ui.add(egui::ProgressBar::new(pct).text(format!("{:.0}%", pct * 100.0)).desired_width(ui.available_width() * 0.65));
+                                        let spacing_width = ui.spacing().item_spacing.x*2.0;
+                                        ui.horizontal(| ui | { 
+                                            ui.add_space(spacing_width);
+                                            ui.label(name);
+                                        });
+                                        ui.add(egui::ProgressBar::new(pct).text(format!("{:.0}%", pct * 100.0)));
                                         ui.end_row();
                                     }
                                 });
@@ -2995,7 +2998,7 @@ impl TemplateApp {
                             .x;
 
                         let id = ui.make_persistent_id("sink_points");
-                        let spacing_width = ui.spacing().item_spacing.x;
+                        let spacing_width = ui.spacing().item_spacing.x * 2.0;
                         let header_result = egui::collapsing_header::CollapsingState::load_with_default_open(
                             ui.ctx(),
                             id,
@@ -3004,7 +3007,7 @@ impl TemplateApp {
                         .show_header(ui, |ui| {
                              egui::Grid::new("sink_points_header_grid")
                                 .num_columns(2)
-                                .min_col_width(sink_points_width)
+                                .min_col_width(sink_points_width + spacing_width)
                                 .show(ui, |ui| {
                                 // Show total sink points on the right (even if zero)
                                 //ui.add(egui::Label::new(total_sink_points.to_float_string()));
