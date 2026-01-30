@@ -2671,11 +2671,17 @@ impl TemplateApp {
                     }
                 });
         } else {
+            // Compute 20% of the window width (clamped to a reasonable min)
+            let panel_width = (ctx.input(|i| i.screen_rect().width()) * 0.2).max(120.0);
             egui::SidePanel::left("left_panel")
                 .resizable(false)
-                .default_width(250.0)
+                .exact_width(panel_width)
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
+                    // Use vertical scroll area so left-panel content can scroll when it doesn't fit vertically
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
                         // Controls popup
                                         if ui.button("Show controls list").clicked() {
                                 self.show_controls_popup = true;
@@ -2703,16 +2709,27 @@ impl TemplateApp {
                             |ui| {
                                 // Collapse button
                                 if ui.button("<<").on_hover_text("Fold left panel").clicked() {
-                                    self.left_panel_collapsed = true;
+                                    // Persist in settings so the collapsed state is used by the rendering path
+                                    self.settings.left_panel_folded = true;
                                 }
                             });
                     });
             
                     // Save/Load section
                     ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            let save_resp = ui.text_edit_singleline(&mut self.save_name)
-                                .on_hover_text("Name to save/load...");
+                        ui.horizontal_wrapped(|ui| {
+                            // Compute width for the save name text input so it fills remaining space before the Save/Load buttons
+                            let available = ui.available_width();
+                            let save_label = "Save";
+                            let load_label = "Load";
+                            let save_label_w = ui.painter().layout_no_wrap(save_label.to_owned(), egui::FontId::default(), ui.visuals().text_color()).size().x;
+                            let load_label_w = ui.painter().layout_no_wrap(load_label.to_owned(), egui::FontId::default(), ui.visuals().text_color()).size().x;
+                            let button_extra_padding = 16.0; // approximate per-button horizontal padding
+                            let save_load_buttons_width = save_label_w + load_label_w + button_extra_padding * 2.0 + ui.spacing().item_spacing.x; // includes spacing between buttons
+                            let input_text_width = (available - save_load_buttons_width - ui.spacing().item_spacing.x * 2.0).max(64.0);
+
+                            let save_edit = egui::TextEdit::singleline(&mut self.save_name).desired_width(input_text_width);
+                            let save_resp = ui.add(save_edit).on_hover_text("Name to save/load...");
 
                             // Update suggestions and show popup when the box is focused/changed
                             if save_resp.has_focus() || save_resp.changed() {
@@ -2849,7 +2866,7 @@ impl TemplateApp {
                     });
 
                     self.separator_text_left(ui, "Settings");
-                    ui.horizontal(| ui | {
+                    ui.horizontal_wrapped(| ui | {
                         if ui.button("Unlock all alt recipes").clicked() {
                             let all_recipe_keys: Vec<String> = self
                                 .game_data
@@ -3446,9 +3463,8 @@ impl TemplateApp {
                     }
 
                     // Helper to render an item list in two columns (value | icon + name)
-                    let render_item_list = |ui: &mut egui::Ui, id_prefix: &str, map: std::collections::HashMap<String, crate::fractional_number::FractionalNumber>, empty_hint: &str| {
+                    let render_item_list = |ui: &mut egui::Ui, id_prefix: &str, map: std::collections::HashMap<String, crate::fractional_number::FractionalNumber>| {
                         if map.is_empty() {
-                            ui.label(empty_hint);
                             return;
                         }
                         let mut items: Vec<(String, crate::fractional_number::FractionalNumber)> = map.into_iter().collect();
@@ -3491,13 +3507,14 @@ impl TemplateApp {
                     };
 
                     self.separator_text_left(ui, "Inputs");
-                    render_item_list(ui, "inputs", inputs_map, "(no inputs)");
+                    render_item_list(ui, "inputs", inputs_map);
 
                     self.separator_text_left(ui, "Outputs");
-                    render_item_list(ui, "outputs", outputs_map, "(no outputs)");
+                    render_item_list(ui, "outputs", outputs_map);
 
                     self.separator_text_left(ui, "Intermediates");
-                    render_item_list(ui, "intermediates", intermediates_map, "(no intermediates)");
+                    render_item_list(ui, "intermediates", intermediates_map);
+                    });
                 });
         }
     }
