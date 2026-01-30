@@ -3196,7 +3196,162 @@ impl TemplateApp {
                         // we don't need the returned open state for now
                     }
                     self.separator_text_left(ui, "Machines");
-                    // !TODO: Show expandable list of machines with recipes detailizations
+
+                    // Compute total machines and per-building & per-recipe breakdown
+                    let mut total_machines = FractionalNumber::default();
+                    let mut detailed_machines: std::collections::HashMap<String, FractionalNumber> = std::collections::HashMap::new();
+                    let mut recipe_breakdown: std::collections::HashMap<String, std::collections::HashMap<String, FractionalNumber>> = std::collections::HashMap::new();
+                    let mut machine_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                    let mut recipe_counts: std::collections::HashMap<String, std::collections::HashMap<String, usize>> = std::collections::HashMap::new();
+
+                    for node_any in &self.production_app.nodes {
+                        if let Some(craft) = node_any.downcast_ref::<crate::node::CraftNode>() {
+                            let bname = craft.building_name.clone();
+                            let rate = craft.current_rate;
+                            total_machines += rate.clone();
+                            detailed_machines
+                                .entry(bname.clone())
+                                .and_modify(|v| *v += rate.clone())
+                                .or_insert(rate.clone());
+                            recipe_breakdown
+                                .entry(bname.clone())
+                                .or_insert_with(std::collections::HashMap::new)
+                                .entry(craft.recipe_name.clone())
+                                .and_modify(|v| *v += rate.clone())
+                                .or_insert(rate.clone());
+                            machine_counts
+                                .entry(bname.clone())
+                                .and_modify(|c| *c += 1)
+                                .or_insert(1);
+                            // per-recipe node count
+                            recipe_counts
+                                .entry(bname.clone())
+                                .or_insert_with(std::collections::HashMap::new)
+                                .entry(craft.recipe_name.clone())
+                                .and_modify(|c| *c += 1)
+                                .or_insert(1);
+                        } else if let Some(group) = node_any.downcast_ref::<crate::node::GroupNode>() {
+                            // Include group node as a separate building row
+                            let name = format!("Group {}", group.base.id);
+                            let rate = group.current_rate;
+                            total_machines += rate.clone();
+                            detailed_machines
+                                .entry(name.clone())
+                                .and_modify(|v| *v += rate.clone())
+                                .or_insert(rate.clone());
+                            machine_counts
+                                .entry(name.clone())
+                                .and_modify(|c| *c += 1)
+                                .or_insert(1);
+                        }
+                    }
+
+                    if !detailed_machines.is_empty() {
+                        // Sort buildings alphabetically (case-insensitive)
+                        let mut sorted_buildings: Vec<(String, FractionalNumber)> = detailed_machines.into_iter().collect();
+                        sorted_buildings.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+
+                        // Include a leading '-' in the sample so we account for negative values when measuring width
+                        let machines_width = ui
+                            .painter()
+                            .layout_no_wrap("-000000.00".to_owned(), egui::FontId::default(), egui::Color32::WHITE)
+                            .size()
+                            .x
+                            + 8.0;
+                        let spacing_width = ui.spacing().item_spacing.x * 2.0;
+
+                        // Render each machine category (no outer "Machines" collapsible)
+                        for (bname, count) in sorted_buildings.iter() {
+                            let bid = ui.make_persistent_id(format!("machines:{}", bname));
+                            let header_state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), bid, false);
+                            header_state.show_header(ui, |ui| {
+                                egui::Grid::new(format!("machine_row_grid:{}", bname))
+                                    .num_columns(2)
+                                    .min_col_width(machines_width + spacing_width)
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(spacing_width);
+                                            let mut s = count.to_float_string();
+                                            let txt = egui::TextEdit::singleline(&mut s).desired_width(machines_width);
+                                            ui.add_enabled(false, txt);
+                                            // show number of nodes of this building type
+                                            let num_nodes = machine_counts.get(bname).copied().unwrap_or(0);
+                                            ui.label(format!(" ({})", num_nodes));
+                                        })
+                                        .response
+                                        .on_hover_text(&count.to_fraction_string());
+
+                                        ui.label(bname).on_hover_text(bname);
+                                    });
+                            })
+                            .body(|ui| {
+                                // Per-recipe breakdown for this building (if any)
+                                if let Some(recipes_map) = recipe_breakdown.get(bname) {
+                                    let mut rec_vec: Vec<(String, FractionalNumber)> = recipes_map
+                                        .iter()
+                                        .map(|(k, v)| (k.clone(), v.clone()))
+                                        .collect();
+                                        // Sort recipes alphabetically (case-insensitive)
+                                        rec_vec.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+
+                                        egui::Grid::new(format!("machine:recipes_grid:{}", bname))
+                                            .num_columns(2)
+                                            .min_col_width(machines_width + spacing_width)
+                                            .show(ui, |ui| {
+                                            for (rname, rcnt) in rec_vec.iter() {
+                                                ui.horizontal(|ui| {
+                                                    ui.add_space(spacing_width * 2.0);
+                                                    let mut s = rcnt.to_float_string();
+                                                    let txt = egui::TextEdit::singleline(&mut s).desired_width(machines_width);
+                                                    ui.add_enabled(false, txt);
+                                                    // show number of nodes for this recipe under this building
+                                                    let num_recipes = recipe_counts
+                                                        .get(bname)
+                                                        .and_then(|m| m.get(rname))
+                                                        .copied()
+                                                        .unwrap_or(0);
+                                                    ui.label(format!(" ({})", num_recipes));
+                                                })
+                                                .response
+                                                .on_hover_text(&rcnt.to_fraction_string());
+
+                                                ui.horizontal(|ui| {
+                                                    if let Some(recipe_rc) = self.game_data.recipes.iter().find(|r| r.name == *rname) {
+                                                        // Show all icons
+                                                        for inp in recipe_rc.ins.as_slice() {
+                                                            if let Some(h) = self.item_icon_cache.get(&inp.item_name) {
+                                                                let _ = ui.add(egui::Image::new((h.id(), egui::vec2(18.0, 18.0))));
+                                                            } else {
+                                                                ui.add_space(18.0);
+                                                            }
+                                                        }
+
+                                                        if !recipe_rc.ins.is_empty() && !recipe_rc.outs.is_empty() {
+                                                            ui.label("-->");
+                                                        }
+
+                                                        for out in recipe_rc.outs.as_slice() {
+                                                            if let Some(h) = self.item_icon_cache.get(&out.item_name) {
+                                                                let _ = ui.add(egui::Image::new((h.id(), egui::vec2(18.0, 18.0))));
+                                                            } else {
+                                                                ui.add_space(18.0);
+                                                            }
+                                                        }
+                                                        ui.label(&recipe_rc.display_name).on_hover_text(&recipe_rc.name);
+                                                    } else {
+                                                        ui.label(rname).on_hover_text(rname);
+                                                    }
+                                                });
+
+                                                ui.end_row();
+                                            }
+                                        });
+                                } else {
+                                    ui.label("(no recipes)");
+                                }
+                            });
+                        }
+                    }
                     self.separator_text_left(ui, "Inputs");
                     // !TODO: show list of all inputs
                     self.separator_text_left(ui, "Outputs");
