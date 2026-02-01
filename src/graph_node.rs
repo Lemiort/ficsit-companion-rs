@@ -423,6 +423,11 @@ pub enum PendingChange {
         pin_index: usize,
         locked: bool,
     },
+    /// Group name change
+    GroupName {
+        node_id: u64,
+        name: String,
+    },
 }
 
 impl PendingChange {
@@ -498,5 +503,10 @@ impl PendingChange {
             pin_index,
             locked,
         }
+    }
+
+    /// Create a group name change
+    pub fn group_name(node_id: u64, name: String) -> Self {
+        Self::GroupName { node_id, name }
     }
 }

@@ -298,6 +298,70 @@ impl OrganizerNode {
     }
 }
 
+/// Serialized representation of a node stored within a group.
+/// This stores the full node data (not just ID) so groups are self-contained.
+#[derive(Debug, Clone)]
+pub struct GroupedNode {
+    pub node_data: GroupedNodeData,
+    /// Relative position within the group (offset from group origin)
+    pub relative_pos: (f32, f32),
+}
+
+/// The actual node data stored in a group
+#[derive(Debug, Clone)]
+pub enum GroupedNodeData {
+    Craft {
+        recipe_name: String,
+        current_rate: FractionalNumber,
+        num_somersloop: FractionalNumber,
+        built: bool,
+        building_name: String,
+        recipe_power: f64,
+        power_exponent: f64,
+        somersloop_power_exponent: f64,
+        somersloop_mult: FractionalNumber,
+        variable_power: bool,
+        ins: Vec<GroupedPin>,
+        outs: Vec<GroupedPin>,
+    },
+    Organizer {
+        kind: NodeKind,
+        item_name: Option<String>,
+        ins: Vec<GroupedPin>,
+        outs: Vec<GroupedPin>,
+    },
+    Sink {
+        item_name: Option<String>,
+        ins: Vec<GroupedPin>,
+    },
+    Group {
+        name: String,
+        current_rate: FractionalNumber,
+        nodes: Vec<GroupedNode>,
+        links: Vec<GroupedLink>,
+        ins: Vec<GroupedPin>,
+        outs: Vec<GroupedPin>,
+    },
+}
+
+/// Serialized pin for grouped nodes
+#[derive(Debug, Clone)]
+pub struct GroupedPin {
+    pub item_name: Option<String>,
+    pub base_rate: FractionalNumber,
+    pub current_rate: FractionalNumber,
+    pub locked: bool,
+}
+
+/// Link between nodes within a group (uses indices into the group's nodes vec)
+#[derive(Debug, Clone)]
+pub struct GroupedLink {
+    pub start_node_idx: usize,
+    pub start_pin_idx: usize,
+    pub end_node_idx: usize,
+    pub end_pin_idx: usize,
+}
+
 /// A group node that contains other nodes
 #[derive(Debug, Clone)]
 pub struct GroupNode {
@@ -305,10 +369,27 @@ pub struct GroupNode {
     pub current_rate: FractionalNumber,
     pub same_clock_power: FractionalNumber,
     pub last_underclock_power: FractionalNumber,
-    pub nodes: Vec<u64>, // IDs of contained nodes
+    /// Stored nodes within the group
+    pub grouped_nodes: Vec<GroupedNode>,
+    /// The rate of each node when this group was created (to preserve info when rate is 0)
+    pub nodes_base_rate: Vec<FractionalNumber>,
+    /// Links between nodes within the group
+    pub grouped_links: Vec<GroupedLink>,
+    /// Aggregate inputs (item_name -> rate)
     pub inputs: HashMap<String, FractionalNumber>,
+    /// Aggregate outputs (item_name -> rate)
     pub outputs: HashMap<String, FractionalNumber>,
+    /// Aggregate sinked points (item_name -> points)
     pub detailed_sinked_points: HashMap<String, FractionalNumber>,
+    /// Group name
+    pub name: String,
+    /// Whether this group has variable power (cached)
+    pub variable_power: bool,
+    /// Total machines per building type
+    pub total_machines: HashMap<String, FractionalNumber>,
+    /// Built machines per building type
+    pub built_machines: HashMap<String, FractionalNumber>,
+    /// Whether there was an error loading this group
     pub loading_error: bool,
 }
 
@@ -316,27 +397,385 @@ impl GroupNode {
     pub fn new(id: u64) -> Self {
         Self {
             base: Node::new(id, NodeKind::Group),
-            current_rate: FractionalNumber::default(),
+            current_rate: FractionalNumber::new(1, 1),
             same_clock_power: FractionalNumber::default(),
             last_underclock_power: FractionalNumber::default(),
-            nodes: Vec::new(),
+            grouped_nodes: Vec::new(),
+            nodes_base_rate: Vec::new(),
+            grouped_links: Vec::new(),
             inputs: HashMap::new(),
             outputs: HashMap::new(),
             detailed_sinked_points: HashMap::new(),
+            name: String::new(),
+            variable_power: false,
+            total_machines: HashMap::new(),
+            built_machines: HashMap::new(),
             loading_error: false,
         }
     }
 
-    pub fn add_contained_node(&mut self, node_id: u64) {
-        self.nodes.push(node_id);
+    /// Create a group from existing nodes and links
+    pub fn from_nodes_and_links(
+        id: u64,
+        name: String,
+        grouped_nodes: Vec<GroupedNode>,
+        nodes_base_rate: Vec<FractionalNumber>,
+        grouped_links: Vec<GroupedLink>,
+    ) -> Self {
+        let mut group = Self::new(id);
+        group.name = name;
+        group.grouped_nodes = grouped_nodes;
+        group.nodes_base_rate = nodes_base_rate;
+        group.grouped_links = grouped_links;
+        group.current_rate = FractionalNumber::new(1, 1);
+        group.create_pins_from_grouped_nodes();
+        group.compute_power_usage();
+        group.update_details();
+        group
     }
 
-    pub fn set_built_state(&mut self, _built: bool) {
-        // Implementation for tracking group building progress
+    /// Create input/output pins based on net consumed/produced items in the group
+    fn create_pins_from_grouped_nodes(&mut self) {
+        self.inputs.clear();
+        self.outputs.clear();
+        self.base.ins.clear();
+        self.base.outs.clear();
+
+        // Collect all inputs and outputs from grouped nodes
+        for grouped_node in &self.grouped_nodes {
+            match &grouped_node.node_data {
+                GroupedNodeData::Craft { ins, outs, .. } => {
+                    for pin in ins {
+                        if let Some(name) = &pin.item_name {
+                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                        }
+                    }
+                    for pin in outs {
+                        if let Some(name) = &pin.item_name {
+                            *self.outputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                        }
+                    }
+                }
+                GroupedNodeData::Group { ins: sub_inputs, outs: sub_outputs, .. } => {
+                    // For nested groups, we'd need to recursively get inputs/outputs
+                    // For simplicity, use the stored group pins
+                    for pin in sub_inputs {
+                        if let Some(name) = &pin.item_name {
+                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                        }
+                    }
+                    for pin in sub_outputs {
+                        if let Some(name) = &pin.item_name {
+                            *self.outputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                        }
+                    }
+                }
+                GroupedNodeData::Sink { ins, .. } => {
+                    for pin in ins {
+                        if let Some(name) = &pin.item_name {
+                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                        }
+                    }
+                }
+                GroupedNodeData::Organizer { .. } => {
+                    // Organizers don't contribute net inputs/outputs
+                }
+            }
+        }
+
+        // Create input pins for items that are net consumed (sorted alphabetically)
+        let mut pin_id = self.base.id * 1000; // Simple ID generation for pins
+        let mut input_keys: Vec<_> = self.inputs.keys().cloned().collect();
+        input_keys.sort();
+        for item_name in input_keys {
+            let consumed = self.inputs.get(&item_name).cloned().unwrap_or_default();
+            let produced = self.outputs.get(&item_name).cloned().unwrap_or_default();
+            if consumed > produced {
+                let net = consumed - produced;
+                let mut pin = crate::pin::Pin::new(
+                    pin_id,
+                    crate::pin::PinDirection::Input,
+                    self.base.id,
+                    Some(item_name.clone()),
+                    false,
+                    net,
+                );
+                pin.current_rate = net;
+                self.base.ins.push(pin);
+                pin_id += 1;
+            }
+        }
+
+        // Create output pins for items that are net produced (sorted alphabetically)
+        let mut output_keys: Vec<_> = self.outputs.keys().cloned().collect();
+        output_keys.sort();
+        for item_name in output_keys {
+            let produced = self.outputs.get(&item_name).cloned().unwrap_or_default();
+            let consumed = self.inputs.get(&item_name).cloned().unwrap_or_default();
+            if produced > consumed {
+                let net = produced - consumed;
+                let mut pin = crate::pin::Pin::new(
+                    pin_id,
+                    crate::pin::PinDirection::Output,
+                    self.base.id,
+                    Some(item_name.clone()),
+                    false,
+                    net,
+                );
+                pin.current_rate = net;
+                self.base.outs.push(pin);
+                pin_id += 1;
+            }
+        }
     }
 
+    /// Create input/output pins based on net consumed/produced items in the group
+    /// Uses provided ID generator function for pin IDs
+    pub fn create_pins_from_grouped_nodes_with_id_gen<F>(&mut self, mut get_id: F)
+    where
+        F: FnMut() -> u64,
+    {
+        self.inputs.clear();
+        self.outputs.clear();
+        self.base.ins.clear();
+        self.base.outs.clear();
+
+        // Collect all inputs and outputs from grouped nodes
+        for grouped_node in &self.grouped_nodes {
+            match &grouped_node.node_data {
+                GroupedNodeData::Craft { ins, outs, .. } => {
+                    for pin in ins {
+                        if let Some(name) = &pin.item_name {
+                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                        }
+                    }
+                    for pin in outs {
+                        if let Some(name) = &pin.item_name {
+                            *self.outputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                        }
+                    }
+                }
+                GroupedNodeData::Group { ins, outs, .. } => {
+                    // Use the stored group pins for nested groups
+                    for pin in ins {
+                        if let Some(name) = &pin.item_name {
+                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                        }
+                    }
+                    for pin in outs {
+                        if let Some(name) = &pin.item_name {
+                            *self.outputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                        }
+                    }
+                }
+                GroupedNodeData::Sink { ins, .. } => {
+                    for pin in ins {
+                        if let Some(name) = &pin.item_name {
+                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                        }
+                    }
+                }
+                GroupedNodeData::Organizer { .. } => {
+                    // Organizers don't contribute net inputs/outputs
+                }
+            }
+        }
+
+        // Create input pins for items that are net consumed (sorted alphabetically)
+        let mut input_keys: Vec<_> = self.inputs.keys().cloned().collect();
+        input_keys.sort();
+        for item_name in input_keys {
+            let consumed = self.inputs.get(&item_name).cloned().unwrap_or_default();
+            let produced = self.outputs.get(&item_name).cloned().unwrap_or_default();
+            if consumed > produced {
+                let net = consumed - produced;
+                let mut pin = crate::pin::Pin::new(
+                    get_id(),
+                    crate::pin::PinDirection::Input,
+                    self.base.id,
+                    Some(item_name.clone()),
+                    false,
+                    net,
+                );
+                pin.current_rate = net;
+                self.base.ins.push(pin);
+            }
+        }
+
+        // Create output pins for items that are net produced (sorted alphabetically)
+        let mut output_keys: Vec<_> = self.outputs.keys().cloned().collect();
+        output_keys.sort();
+        for item_name in output_keys {
+            let produced = self.outputs.get(&item_name).cloned().unwrap_or_default();
+            let consumed = self.inputs.get(&item_name).cloned().unwrap_or_default();
+            if produced > consumed {
+                let net = produced - consumed;
+                let mut pin = crate::pin::Pin::new(
+                    get_id(),
+                    crate::pin::PinDirection::Output,
+                    self.base.id,
+                    Some(item_name.clone()),
+                    false,
+                    net,
+                );
+                pin.current_rate = net;
+                self.base.outs.push(pin);
+            }
+        }
+    }
+
+    /// Update the group rate and propagate to contained nodes
+    pub fn update_rate(&mut self, new_rate: FractionalNumber) {
+        self.current_rate = new_rate;
+        
+        // Update pins proportionally
+        for pin in &mut self.base.ins {
+            pin.current_rate = pin.base_rate * new_rate;
+        }
+        for pin in &mut self.base.outs {
+            pin.current_rate = pin.base_rate * new_rate;
+        }
+
+        self.compute_power_usage();
+        self.update_details();
+    }
+
+    /// Compute total power usage from all contained nodes
+    pub fn compute_power_usage(&mut self) {
+        self.same_clock_power = FractionalNumber::default();
+        self.last_underclock_power = FractionalNumber::default();
+        self.variable_power = false;
+
+        for (i, grouped_node) in self.grouped_nodes.iter().enumerate() {
+            if let GroupedNodeData::Craft { 
+                recipe_power, 
+                power_exponent, 
+                somersloop_power_exponent,
+                somersloop_mult,
+                num_somersloop,
+                variable_power,
+                ..
+            } = &grouped_node.node_data {
+                // Compute power for this craft node at its current rate
+                let base_rate = self.nodes_base_rate.get(i).cloned().unwrap_or_default();
+                let rate_value = (base_rate * self.current_rate).value();
+                
+                if rate_value > 0.0 {
+                    let num_machines = rate_value.ceil().max(1.0);
+                    let num_full_machines = rate_value.floor().max(0.0);
+                    
+                    let boost = 1.0 + num_somersloop.value() * somersloop_mult.value();
+                    let boost_pow = boost.powf(*somersloop_power_exponent);
+                    
+                    let same_clock = num_machines * recipe_power * boost_pow * (rate_value / num_machines).powf(*power_exponent);
+                    let mut last_underclock = num_full_machines * recipe_power * boost_pow;
+                    let fractional = rate_value - num_full_machines;
+                    if fractional > 0.0 {
+                        last_underclock += recipe_power * boost_pow * fractional.powf(*power_exponent);
+                    }
+                    
+                    self.same_clock_power += FractionalNumber::new((same_clock * 1000.0).round() as i64, 1000);
+                    self.last_underclock_power += FractionalNumber::new((last_underclock * 1000.0).round() as i64, 1000);
+                    self.variable_power |= *variable_power;
+                }
+            }
+        }
+    }
+
+    /// Update detailed machine counts and other statistics
     pub fn update_details(&mut self) {
-        // Recalculate input/output requirements
+        self.total_machines.clear();
+        self.built_machines.clear();
+        self.detailed_sinked_points.clear();
+
+        for (i, grouped_node) in self.grouped_nodes.iter().enumerate() {
+            match &grouped_node.node_data {
+                GroupedNodeData::Craft { building_name, built, .. } => {
+                    let base_rate = self.nodes_base_rate.get(i).cloned().unwrap_or_default();
+                    let current = base_rate * self.current_rate;
+                    
+                    *self.total_machines.entry(building_name.clone()).or_default() += current;
+                    if *built {
+                        *self.built_machines.entry(building_name.clone()).or_default() += current;
+                    }
+                }
+                GroupedNodeData::Group { .. } => {
+                    // TODO: Recursively accumulate from nested groups
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Set built state on all contained craft nodes
+    pub fn set_built_state(&mut self, built: bool) {
+        for grouped_node in &mut self.grouped_nodes {
+            if let GroupedNodeData::Craft { built: node_built, .. } = &mut grouped_node.node_data {
+                *node_built = built;
+            } else if let GroupedNodeData::Group { nodes, .. } = &mut grouped_node.node_data {
+                // Recursively set built state on nested groups
+                for nested in nodes {
+                    if let GroupedNodeData::Craft { built: nested_built, .. } = &mut nested.node_data {
+                        *nested_built = built;
+                    }
+                }
+            }
+        }
+        self.update_details();
+    }
+
+    /// Check if all contained craft nodes are built
+    pub fn is_fully_built(&self) -> bool {
+        for grouped_node in &self.grouped_nodes {
+            match &grouped_node.node_data {
+                GroupedNodeData::Craft { built, .. } => {
+                    if !built {
+                        return false;
+                    }
+                }
+                GroupedNodeData::Group { nodes, .. } => {
+                    for nested in nodes {
+                        if let GroupedNodeData::Craft { built, .. } = &nested.node_data {
+                            if !built {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
+    /// Count (built, total) craft nodes in this group
+    pub fn count_craft_nodes(&self) -> (usize, usize) {
+        let mut built = 0usize;
+        let mut total = 0usize;
+        
+        for grouped_node in &self.grouped_nodes {
+            match &grouped_node.node_data {
+                GroupedNodeData::Craft { built: is_built, .. } => {
+                    total += 1;
+                    if *is_built {
+                        built += 1;
+                    }
+                }
+                GroupedNodeData::Group { nodes, .. } => {
+                    for nested in nodes {
+                        if let GroupedNodeData::Craft { built: is_built, .. } = &nested.node_data {
+                            total += 1;
+                            if *is_built {
+                                built += 1;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        (built, total)
     }
 }
 

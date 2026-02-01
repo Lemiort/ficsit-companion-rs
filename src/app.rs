@@ -334,6 +334,21 @@ impl SnarlViewer {
         result
     }
 
+    fn drain_pending_group_name_changes(&mut self) -> Vec<(u64, String)> {
+        let mut result = Vec::new();
+        let mut remaining = Vec::new();
+        for change in std::mem::take(&mut self.pending_changes) {
+            match change {
+                PendingChange::GroupName { node_id, name } => {
+                    result.push((node_id, name));
+                }
+                other => remaining.push(other),
+            }
+        }
+        self.pending_changes = remaining;
+        result
+    }
+
     fn drain_pending_dropped_wire(&mut self) -> Option<PendingDroppedWire> {
         self.pending_dropped_wire.take()
     }
@@ -1459,6 +1474,8 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
         if let Some(node_info) = snarl.get_node_info(node_id) {
             // Access the GraphNode stored in the Snarl
             let node = &node_info.value;
+            let node_graph_id = node.id;
+            let is_group = node.node_type == GraphNodeType::Group;
             // Look up display data from cache
             let cached = self.node_cache.get(&node.id);
             egui::Grid::new(format!("header_grid_{}", node.id))
@@ -1467,10 +1484,37 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                 .show(ui, |ui| {
                     // skip first column
                     ui.horizontal(|_ui| {});
-                    let label = cached
-                        .map(|c| c.label().to_string())
-                        .unwrap_or_else(|| format!("Node {}", node.id));
-                    ui.label(label);
+                    
+                    if is_group {
+                        // Editable group name
+                        let label = cached
+                            .map(|c| c.label().to_string())
+                            .unwrap_or_else(|| "Group".to_string());
+                        let key = format!("group_name_{}", node_graph_id);
+                        let buf = self.edit_buffers.entry(key.clone()).or_insert_with(|| label.clone());
+                        
+                        let response = ui.add(
+                            egui::TextEdit::singleline(buf)
+                                .desired_width(ui.available_width() * 0.8)
+                                .hint_text("Group name")
+                        );
+                        
+                        // Commit on Enter or lost focus
+                        if response.lost_focus() || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                            let new_name = self.edit_buffers.get(&key).cloned().unwrap_or_default();
+                            if new_name != label {
+                                self.pending_changes.push(PendingChange::GroupName { 
+                                    node_id: node_graph_id, 
+                                    name: new_name 
+                                });
+                            }
+                        }
+                    } else {
+                        let label = cached
+                            .map(|c| c.label().to_string())
+                            .unwrap_or_else(|| format!("Node {}", node_graph_id));
+                        ui.label(label);
+                    }
 
                     if self.settings.show_build_progress {
                         // Right-aligned controls
@@ -1482,7 +1526,7 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                                 if resp.changed() {
                                     // Queue the change for processing after rendering
                                     self.pending_changes
-                                        .push(PendingChange::built(node.id, checked));
+                                        .push(PendingChange::built(node_graph_id, checked));
                                 }
                             }
                         });
@@ -2602,6 +2646,30 @@ impl eframe::App for TemplateApp {
 }
 
 impl TemplateApp {
+    /// Recursively add recipe breakdown from grouped nodes
+    fn add_grouped_recipe_breakdown(
+        grouped_nodes: &[crate::node::GroupedNode],
+        recipe_breakdown: &mut std::collections::HashMap<String, std::collections::HashMap<String, crate::fractional_number::FractionalNumber>>,
+    ) {
+        for gn in grouped_nodes {
+            match &gn.node_data {
+                crate::node::GroupedNodeData::Craft { building_name, recipe_name, current_rate, .. } => {
+                    recipe_breakdown
+                        .entry(building_name.clone())
+                        .or_insert_with(std::collections::HashMap::new)
+                        .entry(recipe_name.clone())
+                        .and_modify(|v| *v += *current_rate)
+                        .or_insert(*current_rate);
+                }
+                crate::node::GroupedNodeData::Group { nodes, .. } => {
+                    // Recursively add from nested groups
+                    Self::add_grouped_recipe_breakdown(nodes, recipe_breakdown);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn separator_text_left(&self, ui: &mut egui::Ui, text: &str) {
         // Draw a separator whose text appears close to the left edge (similar to ImGui::SeparatorText)
         // Add a short visible line at the very left to match ImGui's visual style.
@@ -2912,6 +2980,22 @@ impl TemplateApp {
                                         .or_insert(craft.current_rate);
                                     all_built_machines += craft.current_rate;
                                 }
+                            } else if let Some(group) = node_any.downcast_ref::<crate::node::GroupNode>() {
+                                // Add machines from the group's contained nodes
+                                for (bname, count) in &group.total_machines {
+                                    total_machines
+                                        .entry(bname.clone())
+                                        .and_modify(|v| *v += *count)
+                                        .or_insert(*count);
+                                    all_machines += *count;
+                                }
+                                for (bname, count) in &group.built_machines {
+                                    built_machines
+                                        .entry(bname.clone())
+                                        .and_modify(|v| *v += *count)
+                                        .or_insert(*count);
+                                    all_built_machines += *count;
+                                }
                             }
                         }
 
@@ -3218,8 +3302,6 @@ impl TemplateApp {
                     let mut total_machines = FractionalNumber::default();
                     let mut detailed_machines: std::collections::HashMap<String, FractionalNumber> = std::collections::HashMap::new();
                     let mut recipe_breakdown: std::collections::HashMap<String, std::collections::HashMap<String, FractionalNumber>> = std::collections::HashMap::new();
-                    let mut machine_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-                    let mut recipe_counts: std::collections::HashMap<String, std::collections::HashMap<String, usize>> = std::collections::HashMap::new();
 
                     for node_any in &self.production_app.nodes {
                         if let Some(craft) = node_any.downcast_ref::<crate::node::CraftNode>() {
@@ -3236,30 +3318,17 @@ impl TemplateApp {
                                 .entry(craft.recipe_name.clone())
                                 .and_modify(|v| *v += rate.clone())
                                 .or_insert(rate.clone());
-                            machine_counts
-                                .entry(bname.clone())
-                                .and_modify(|c| *c += 1)
-                                .or_insert(1);
-                            // per-recipe node count
-                            recipe_counts
-                                .entry(bname.clone())
-                                .or_insert_with(std::collections::HashMap::new)
-                                .entry(craft.recipe_name.clone())
-                                .and_modify(|c| *c += 1)
-                                .or_insert(1);
                         } else if let Some(group) = node_any.downcast_ref::<crate::node::GroupNode>() {
-                            // Include group node as a separate building row
-                            let name = format!("Group {}", group.base.id);
-                            let rate = group.current_rate;
-                            total_machines += rate.clone();
-                            detailed_machines
-                                .entry(name.clone())
-                                .and_modify(|v| *v += rate.clone())
-                                .or_insert(rate.clone());
-                            machine_counts
-                                .entry(name.clone())
-                                .and_modify(|c| *c += 1)
-                                .or_insert(1);
+                            // Include machines from the group's contained nodes
+                            for (bname, rate) in &group.total_machines {
+                                total_machines += *rate;
+                                detailed_machines
+                                    .entry(bname.clone())
+                                    .and_modify(|v| *v += *rate)
+                                    .or_insert(*rate);
+                            }
+                            // Add recipe breakdown from grouped_nodes
+                            Self::add_grouped_recipe_breakdown(&group.grouped_nodes, &mut recipe_breakdown);
                         }
                     }
 
@@ -3291,9 +3360,9 @@ impl TemplateApp {
                                             let mut s = count.to_float_string();
                                             let txt = egui::TextEdit::singleline(&mut s).desired_width(machines_width);
                                             ui.add_enabled(false, txt);
-                                            // show number of nodes of this building type
-                                            let num_nodes = machine_counts.get(bname).copied().unwrap_or(0);
-                                            ui.label(format!(" ({})", num_nodes));
+                                            // show rate rounded up (ceiling) for this building type
+                                            let ceil_count = count.value().ceil() as i64;
+                                            ui.label(format!(" ({})", ceil_count));
                                         })
                                         .response
                                         .on_hover_text(&count.to_fraction_string());
@@ -3321,13 +3390,9 @@ impl TemplateApp {
                                                     let mut s = rcnt.to_float_string();
                                                     let txt = egui::TextEdit::singleline(&mut s).desired_width(machines_width);
                                                     ui.add_enabled(false, txt);
-                                                    // show number of nodes for this recipe under this building
-                                                    let num_recipes = recipe_counts
-                                                        .get(bname)
-                                                        .and_then(|m| m.get(rname))
-                                                        .copied()
-                                                        .unwrap_or(0);
-                                                    ui.label(format!(" ({})", num_recipes));
+                                                    // show rate rounded up (ceiling) for this recipe
+                                                    let ceil_count = rcnt.value().ceil() as i64;
+                                                    ui.label(format!(" ({})", ceil_count));
                                                 })
                                                 .response
                                                 .on_hover_text(&rcnt.to_fraction_string());
@@ -4576,11 +4641,74 @@ impl TemplateApp {
                 }
             }
 
+            // Group/Ungroup with Ctrl+G
+            if ctx.input(|i| i.key_pressed(egui::Key::G) && i.modifiers.command) {
+                let snarl_widget = egui_snarl::ui::SnarlWidget::new().id(egui::Id::new("production-snarl"));
+                let selected = snarl_widget.get_selected_nodes(ui);
+                
+                if selected.len() == 1 {
+                    // Single node selected - check if it's a group to ungroup
+                    if let Some(snarl_node) = selected.first() {
+                        if let Some(graph_node) = self.snarl.get_node(*snarl_node) {
+                            let prod_node_id = graph_node.id;
+                            if self.production_app.is_group_node(prod_node_id) {
+                                // Ungroup
+                                match self.production_app.ungroup_node(prod_node_id, Some(&self.game_data)) {
+                                    Ok(restored_ids) => {
+                                        // Remove the group node from snarl
+                                        if self.snarl.get_node(*snarl_node).is_some() {
+                                            let _ = self.snarl.remove_node(*snarl_node);
+                                        }
+                                        // Add restored nodes to snarl - need to rebuild snarl to get links correct
+                                        self.rebuild_snarl_from_production();
+                                        self.emit_message(format!("Ungrouped into {} nodes", restored_ids.len()), log::Level::Info);
+                                    }
+                                    Err(e) => {
+                                        self.emit_message(format!("Ungroup error: {}", e), log::Level::Error);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if selected.len() > 1 {
+                    // Multiple nodes selected - group them
+                    let prod_node_ids: Vec<u64> = selected.iter()
+                        .filter_map(|snarl_idx| self.snarl.get_node(*snarl_idx).map(|n| n.id))
+                        .collect();
+                    
+                    if !prod_node_ids.is_empty() {
+                        match self.production_app.group_nodes(&prod_node_ids) {
+                            Ok(group_id) => {
+                                // Rebuild snarl to show the new group and remove grouped nodes
+                                self.rebuild_snarl_from_production();
+                                self.emit_message(format!("Grouped {} nodes into group", prod_node_ids.len()), log::Level::Info);
+                                let _ = group_id; // used for logging if needed
+                            }
+                            Err(e) => {
+                                self.emit_message(format!("Group error: {}", e), log::Level::Error);
+                            }
+                        }
+                    }
+                }
+            }
+
             // Process pending group built edits collected by the SnarlViewer
             for (node_id, built) in self.snarl_viewer.drain_pending_built_edits() {
                 match self.production_app.set_node_built_state(node_id, built) {
                     Ok(()) => {
                         // Schedule refresh - the build state will come from the rebuilt cache
+                        nodes_to_refresh.push(node_id);
+                    }
+                    Err(e) => {
+                        self.emit_message(format!("Error: {}", e), log::Level::Error);
+                    }
+                }
+            }
+
+            // Process pending group name changes
+            for (node_id, name) in self.snarl_viewer.drain_pending_group_name_changes() {
+                match self.production_app.set_group_name(node_id, name) {
+                    Ok(()) => {
                         nodes_to_refresh.push(node_id);
                     }
                     Err(e) => {

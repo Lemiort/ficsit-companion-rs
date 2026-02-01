@@ -1,14 +1,67 @@
 use crate::fractional_number::FractionalNumber;
 use crate::node::NodeKind;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Serialized representation of a node for .fcs files
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum SerializedNode {
+    Group(SerializedGroupNode),
     Craft(SerializedCraftNode),
     Organizer(SerializedOrganizerNode),
     Sink(SerializedSinkNode),
+}
+
+impl Serialize for SerializedNode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            SerializedNode::Group(g) => g.serialize(serializer),
+            SerializedNode::Craft(c) => c.serialize(serializer),
+            SerializedNode::Organizer(o) => o.serialize(serializer),
+            SerializedNode::Sink(s) => s.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SerializedNode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // First deserialize as a generic JSON value to inspect the kind field
+        let value = serde_json::Value::deserialize(deserializer)?;
+        
+        let kind = value.get("kind")
+            .and_then(|k| k.as_u64())
+            .ok_or_else(|| serde::de::Error::custom("missing 'kind' field"))?;
+        
+        match kind {
+            0 => {
+                let craft: SerializedCraftNode = serde_json::from_value(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(SerializedNode::Craft(craft))
+            }
+            1 | 2 | 4 => {
+                // CustomSplitter, Merger, GameSplitter
+                let org: SerializedOrganizerNode = serde_json::from_value(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(SerializedNode::Organizer(org))
+            }
+            3 => {
+                let group: SerializedGroupNode = serde_json::from_value(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(SerializedNode::Group(group))
+            }
+            5 => {
+                let sink: SerializedSinkNode = serde_json::from_value(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(SerializedNode::Sink(sink))
+            }
+            _ => Err(serde::de::Error::custom(format!("unknown node kind: {}", kind))),
+        }
+    }
 }
 
 /// Craft node serialization
@@ -21,6 +74,20 @@ pub struct SerializedCraftNode {
     pub built: bool,
     pub locked: bool,
     pub num_somersloop: u8,
+}
+
+/// Group node serialization (kind=3)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializedGroupNode {
+    pub kind: u8, // 3 for Group
+    pub pos: SerializedPosition,
+    pub rate: SerializedRate,
+    pub locked: bool,
+    pub name: String,
+    /// Nodes contained within this group
+    pub nodes: Vec<SerializedNode>,
+    /// Links between nodes within this group
+    pub links: Vec<SerializedLink>,
 }
 
 /// Sink node serialization
