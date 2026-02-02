@@ -2074,34 +2074,13 @@ impl ProductionApp {
                             }
                         }
                     } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
-                        // For Merger/CustomSplitter: only add opposite-side pins that are CONNECTED
-                        // This matches the C++ behavior where each multi-pin side is independent
-                        // and we only propagate through established links, not to disconnected pins
-                        match n.base.kind {
-                            NodeKind::Merger | NodeKind::CustomSplitter => {
-                                // Only propagate to opposite side, but only if the pin is connected
-                                let opposite_pins: &[Pin] = match dir {
-                                    PinDirection::Input => &n.base.outs,
-                                    PinDirection::Output => &n.base.ins,
-                                };
-                                for p in opposite_pins {
-                                    // Only add if this pin has a link (is connected to something)
-                                    let has_link = self
-                                        .links
-                                        .iter()
-                                        .any(|l| l.start_pin_id == p.id || l.end_pin_id == p.id);
-                                    if has_link && !visited.contains(&p.id) {
-                                        queue.push_back(p.id);
-                                    }
-                                }
-                            }
-                            _ => {
-                                // GameSplitter: add all pins (ratio-based, one variable per node)
-                                for p in n.base.ins.iter().chain(n.base.outs.iter()) {
-                                    if !visited.contains(&p.id) {
-                                        queue.push_back(p.id);
-                                    }
-                                }
+                        // For Merger/CustomSplitter: include ALL pins of the node so the
+                        // sum constraint (inputs = outputs) can be built. This ensures
+                        // that editing an output recalculates the input and vice versa.
+                        // Connected opposite-side pins will propagate further via links.
+                        for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                            if !visited.contains(&p.id) {
+                                queue.push_back(p.id);
                             }
                         }
                     } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
@@ -2202,6 +2181,53 @@ impl ProductionApp {
                             current_rate.to_fraction_string()
                         );
                         continue;
+                    }
+
+                    // For Merger/CustomSplitter: unconnected pins on the "multi" side should be
+                    // treated as constants (rate 0). The "single" side (output for merger, input
+                    // for splitter) should always be a variable to be solved.
+                    // For Sink: all pins are inputs and unconnected ones are constants.
+                    if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                        let has_link = self
+                            .links
+                            .iter()
+                            .any(|l| l.start_pin_id == *pid || l.end_pin_id == *pid);
+                        let is_constraint_pin = *pid == constraint_pin_id;
+                        
+                        if !has_link && !is_constraint_pin {
+                            // Determine if this is the "single" side (should always be variable)
+                            let is_single_side = match n.base.kind {
+                                NodeKind::Merger => direction == PinDirection::Output,
+                                NodeKind::CustomSplitter => direction == PinDirection::Input,
+                                _ => false, // GameSplitter uses node-level variable
+                            };
+                            
+                            if !is_single_side {
+                                // Unconnected multi-side pin - treat as constant
+                                locked_rates.insert(*pid, current_rate);
+                                log::debug!(
+                                    "[SOLVER] pin {} is unconnected multi-side organizer, treating as constant with rate {}",
+                                    *pid,
+                                    current_rate.to_fraction_string()
+                                );
+                                continue;
+                            }
+                        }
+                    } else if node_any.downcast_ref::<SinkNode>().is_some() {
+                        let has_link = self
+                            .links
+                            .iter()
+                            .any(|l| l.start_pin_id == *pid || l.end_pin_id == *pid);
+                        if !has_link && *pid != constraint_pin_id {
+                            // Unconnected sink pin - treat as constant
+                            locked_rates.insert(*pid, current_rate);
+                            log::debug!(
+                                "[SOLVER] pin {} is unconnected sink, treating as constant with rate {}",
+                                *pid,
+                                current_rate.to_fraction_string()
+                            );
+                            continue;
+                        }
                     }
 
                     // For craft/group/game splitter, use one variable per node with ratio = pin.base_rate
@@ -2480,39 +2506,18 @@ impl ProductionApp {
         }
 
         // Organizer node: sum(inputs) - sum(outputs) = 0 (use ratios)
-        // For Merger/CustomSplitter, only build the constraint if ALL pins are part of the
-        // relevant set (i.e., all pins are connected and involved in this propagation).
-        // Otherwise, skip the constraint since each pin flow is independent.
+        // Build the constraint if any pin of the node is in the relevant set
         for node_any in &self.nodes {
             if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
-                // For Merger/CustomSplitter, check if ALL pins are in relevant set
-                let is_pin_level =
-                    matches!(n.base.kind, NodeKind::Merger | NodeKind::CustomSplitter);
-
-                if is_pin_level {
-                    // Only build sum constraint if ALL pins are in relevant set
-                    let all_pins_relevant = n
-                        .base
-                        .ins
-                        .iter()
-                        .chain(n.base.outs.iter())
-                        .all(|p| relevant_pins.contains(&p.id));
-                    if !all_pins_relevant {
-                        // Skip sum constraint for partial connections - pins are independent
-                        continue;
-                    }
-                } else {
-                    // For other organizers (GameSplitter), check if any pin is touched
-                    let mut touched = false;
-                    for p in n.base.ins.iter().chain(n.base.outs.iter()) {
-                        if relevant_pins.contains(&p.id) {
-                            touched = true;
-                            break;
-                        }
-                    }
-                    if !touched {
-                        continue;
-                    }
+                // Check if any pin of this node is in relevant set
+                let any_pin_relevant = n
+                    .base
+                    .ins
+                    .iter()
+                    .chain(n.base.outs.iter())
+                    .any(|p| relevant_pins.contains(&p.id));
+                if !any_pin_relevant {
+                    continue;
                 }
 
                 let mut eq = vec![FractionalNumber::new(0, 1); num_vars];

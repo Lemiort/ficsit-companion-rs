@@ -1017,20 +1017,12 @@ impl SnarlViewer {
                     }
                 }
 
-                // Queue update to ProductionApp
-                // workaround FIXME
-                // Compare with current cached/production value. Only push changes when a
-                // chosen item is detected from remotes. Do not clear production-held
-                // organizer item when there are no remotes (chosen == None).
-                let current_name = self
-                    .node_cache
-                    .get(&node_display_id)
-                    .and_then(|c| c.item_data().map(|i| i.name.clone()));
-                if chosen.is_some() {
-                    if current_name != chosen {
-                        self.pending_changes
-                            .push(PendingChange::item(node_display_id, chosen.clone()));
-                    }
+                // Queue update to ProductionApp when a connection provides an item.
+                // Always push the change when chosen.is_some() to ensure propagation
+                // even if cache is stale. Do not clear when disconnected (chosen == None).
+                if let Some(ref item_name) = chosen {
+                    self.pending_changes
+                        .push(PendingChange::item(node_display_id, Some(item_name.clone())));
                 }
             }
             GraphNodeType::Sink => {
@@ -1099,20 +1091,12 @@ impl SnarlViewer {
                     }
                 }
 
-                // Queue update to ProductionApp
-                // workaround FIXME
-                // Compare with current cached/production value. Only push changes when a
-                // chosen item is detected from remotes. Do not clear production-held
-                // organizer item when there are no remotes (chosen == None).
-                let current_name = self
-                    .node_cache
-                    .get(&node_display_id)
-                    .and_then(|c| c.item_data().map(|i| i.name.clone()));
-                if chosen.is_some() {
-                    if current_name != chosen {
-                        self.pending_changes
-                            .push(PendingChange::item(node_display_id, chosen.clone()));
-                    }
+                // Queue update to ProductionApp when a connection provides an item.
+                // Always push the change when chosen.is_some() to ensure propagation
+                // even if cache is stale. Do not clear when disconnected (chosen == None).
+                if let Some(ref item_name) = chosen {
+                    self.pending_changes
+                        .push(PendingChange::item(node_display_id, Some(item_name.clone())));
                 }
             }
             _ => {}
