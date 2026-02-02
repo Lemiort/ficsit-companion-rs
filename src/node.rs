@@ -636,6 +636,47 @@ impl GroupNode {
             pin.current_rate = pin.base_rate * new_rate;
         }
 
+        // Update internal grouped nodes' rates
+        for (i, grouped_node) in self.grouped_nodes.iter_mut().enumerate() {
+            let base_rate = self.nodes_base_rate.get(i).cloned().unwrap_or_default();
+            let scaled_rate = base_rate * new_rate;
+            
+            match &mut grouped_node.node_data {
+                GroupedNodeData::Craft { current_rate, ins, outs, .. } => {
+                    *current_rate = scaled_rate;
+                    // Scale internal pins too
+                    for pin in ins.iter_mut() {
+                        pin.current_rate = pin.base_rate * new_rate;
+                    }
+                    for pin in outs.iter_mut() {
+                        pin.current_rate = pin.base_rate * new_rate;
+                    }
+                }
+                GroupedNodeData::Organizer { ins, outs, .. } => {
+                    for pin in ins.iter_mut() {
+                        pin.current_rate = pin.base_rate * new_rate;
+                    }
+                    for pin in outs.iter_mut() {
+                        pin.current_rate = pin.base_rate * new_rate;
+                    }
+                }
+                GroupedNodeData::Sink { ins, .. } => {
+                    for pin in ins.iter_mut() {
+                        pin.current_rate = pin.base_rate * new_rate;
+                    }
+                }
+                GroupedNodeData::Group { current_rate, ins, outs, .. } => {
+                    *current_rate = scaled_rate;
+                    for pin in ins.iter_mut() {
+                        pin.current_rate = pin.base_rate * new_rate;
+                    }
+                    for pin in outs.iter_mut() {
+                        pin.current_rate = pin.base_rate * new_rate;
+                    }
+                }
+            }
+        }
+
         self.compute_power_usage();
         self.update_details();
     }

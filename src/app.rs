@@ -349,6 +349,21 @@ impl SnarlViewer {
         result
     }
 
+    fn drain_pending_group_rate_changes(&mut self) -> Vec<(u64, FractionalNumber)> {
+        let mut result = Vec::new();
+        let mut remaining = Vec::new();
+        for change in std::mem::take(&mut self.pending_changes) {
+            match change {
+                PendingChange::GroupRate { node_id, rate } => {
+                    result.push((node_id, rate));
+                }
+                other => remaining.push(other),
+            }
+        }
+        self.pending_changes = remaining;
+        result
+    }
+
     fn drain_pending_dropped_wire(&mut self) -> Option<PendingDroppedWire> {
         self.pending_dropped_wire.take()
     }
@@ -598,6 +613,12 @@ impl SnarlViewer {
                             group.is_built = built_count == total_count;
                         }
                     }
+                    if let Some(rate) = production_app.get_group_rate(node_id) {
+                        group.rate = rate;
+                    }
+                    // Group rate is locked if any pin is locked
+                    group.locked = pins.input_locked.iter().any(|&l| l) 
+                        || pins.output_locked.iter().any(|&l| l);
                     NodeDisplayData::Group {
                         id: node_id,
                         label,
@@ -1382,6 +1403,66 @@ impl SnarlViewer {
             });
     }
 
+    fn render_group_footer(
+        &mut self,
+        ui: &mut egui::Ui,
+        node_id: u64,
+        group: &crate::graph_node::GroupData,
+    ) {
+        // Render rate/count input for the group
+        egui::Grid::new(format!("footer_group:{}", node_id))
+            .num_columns(3)
+            .spacing([8.0, 8.0])
+            .min_col_width(ui.available_width() / 3.0)
+            .show(ui, |ui| {
+                // Column 1: empty
+                ui.horizontal(|_ui| {});
+
+                // Column 2: Rate/count input
+                ui.horizontal(|ui| {
+                    let mut rate = group.rate.clone();
+                    let key = format!("group_rate:{}", node_id);
+                    // Locked if UI-locked or if any pin is locked (connected)
+                    let is_locked = self.ui_locked_nodes.contains(&node_id) || group.locked;
+                    
+                    // Calculate width for rate input
+                    let rate_width = ui
+                        .painter()
+                        .layout_no_wrap(
+                            "0000.00".to_owned(),
+                            egui::FontId::default(),
+                            egui::Color32::WHITE,
+                        )
+                        .size()
+                        .x
+                        + 8.0;
+
+                    let response = self.render_fractional_input(
+                        ui,
+                        &key,
+                        &mut rate,
+                        rate_width,
+                        is_locked,
+                    );
+
+                    if let Some(new_value) = response {
+                        self.pending_changes
+                            .push(PendingChange::group_rate(node_id, new_value));
+                        log::info!(
+                            "[UI] queued group rate edit: node={} -> {}",
+                            node_id,
+                            new_value.to_fraction_string()
+                        );
+                    }
+                    ui.label("x");
+                });
+
+                // Column 3: empty
+                ui.horizontal(|_ui| {});
+                ui.end_row();
+            });
+    }
+
     fn render_sink_footer(
         &mut self,
         ui: &mut egui::Ui,
@@ -1830,8 +1911,8 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                 NodeDisplayData::Merger { .. }
                 | NodeDisplayData::GameSplitter { .. }
                 | NodeDisplayData::CustomSplitter { .. }
-                | NodeDisplayData::Sink { .. } => true,
-                NodeDisplayData::Group { .. } => false,
+                | NodeDisplayData::Sink { .. } 
+                | NodeDisplayData::Group { .. } => true,
             }
         } else {
             false
@@ -1870,8 +1951,8 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                 NodeDisplayData::Sink { id, sink, .. } => {
                     self.render_sink_footer(ui, *id, sink);
                 }
-                NodeDisplayData::Group { .. } => {
-                    // Group nodes don't have a footer
+                NodeDisplayData::Group { id, group, .. } => {
+                    self.render_group_footer(ui, *id, group);
                 }
             }
         });
@@ -4087,6 +4168,13 @@ impl TemplateApp {
                                     self.snarl_viewer.edit_buffers.remove(&format!("node:{}:somersloop", node_id));
                                 }
                             }
+                            // Update group rate buffer if this is a group node
+                            if let Some(group_rate) = self.production_app.get_group_rate(node_id) {
+                                self.snarl_viewer.edit_buffers.insert(
+                                    format!("group_rate:{}", node_id),
+                                    group_rate.to_float_string()
+                                );
+                            }
 
                             // Expand refresh set to all nodes in the connected component of this node
                             use std::collections::HashSet;
@@ -4575,6 +4663,12 @@ impl TemplateApp {
                                         self.snarl_viewer.edit_buffers.remove(&format!("building:{}", n));
                                     }
                                 }
+                                if let Some(group_rate) = self.production_app.get_group_rate(*n) {
+                                    self.snarl_viewer.edit_buffers.insert(
+                                        format!("group_rate:{}", n),
+                                        group_rate.to_float_string()
+                                    );
+                                }
                                 if let Some((same, last, _variable)) = self.production_app.get_node_power_info(*n) {
                                     let power_str = if self.snarl_viewer.power_equal_clocks { same } else { last };
                                     let power_display = FractionalNumber::from_string(&power_str).map(|f| f.to_float_string()).unwrap_or(power_str);
@@ -4694,6 +4788,112 @@ impl TemplateApp {
                 match self.production_app.set_group_name(node_id, name) {
                     Ok(()) => {
                         nodes_to_refresh.push(node_id);
+                    }
+                    Err(e) => {
+                        self.emit_message(format!("Error: {}", e), log::Level::Error);
+                    }
+                }
+            }
+
+            // Process pending group rate changes
+            for (node_id, rate) in self.snarl_viewer.drain_pending_group_rate_changes() {
+                match self.production_app.set_group_rate(node_id, rate.clone()) {
+                    Ok(()) => {
+                        log::info!(
+                            "[App] set group rate: node={} -> {}",
+                            node_id,
+                            rate.to_fraction_string()
+                        );
+                        
+                        // Update edit buffers immediately so UI reflects changes
+                        // Update own pins and group rate buffer
+                        if let Some((ins, outs)) = self.production_app.get_node_pin_rates(node_id) {
+                            for (i, opt) in ins.iter().enumerate() {
+                                if let Some(s) = opt {
+                                    let key = format!("pin:{}:in:{}", node_id, i);
+                                    let display_str = FractionalNumber::from_string(&s).map(|f| f.to_float_string()).unwrap_or(s.clone());
+                                    self.snarl_viewer.edit_buffers.insert(key, display_str);
+                                }
+                            }
+                            for (i, opt) in outs.iter().enumerate() {
+                                if let Some(s) = opt {
+                                    let key = format!("pin:{}:out:{}", node_id, i);
+                                    let display_str = FractionalNumber::from_string(&s).map(|f| f.to_float_string()).unwrap_or(s.clone());
+                                    self.snarl_viewer.edit_buffers.insert(key, display_str);
+                                }
+                            }
+                        }
+                        if let Some(group_rate) = self.production_app.get_group_rate(node_id) {
+                            self.snarl_viewer.edit_buffers.insert(
+                                format!("group_rate:{}", node_id),
+                                group_rate.to_float_string()
+                            );
+                        }
+                        
+                        // Expand refresh set to all nodes in the connected component
+                        use std::collections::HashSet;
+                        let mut connected: HashSet<u64> = HashSet::new();
+                        connected.insert(node_id);
+                        let mut changed = true;
+                        while changed {
+                            changed = false;
+                            for link in &self.production_app.links {
+                                let start_node = self.production_app.find_pin_location(link.start_pin_id).map(|(n,_,_)| n);
+                                let end_node = self.production_app.find_pin_location(link.end_pin_id).map(|(n,_,_)| n);
+                                if let (Some(s), Some(e)) = (start_node, end_node) {
+                                    if connected.contains(&s) && !connected.contains(&e) {
+                                        connected.insert(e);
+                                        changed = true;
+                                    }
+                                    if connected.contains(&e) && !connected.contains(&s) {
+                                        connected.insert(s);
+                                        changed = true;
+                                    }
+                                }
+                            }
+                        }
+                        // Update edit buffers for all connected nodes
+                        for n in &connected {
+                            if *n == node_id { continue; } // already updated above
+                            if let Some((ins, outs)) = self.production_app.get_node_pin_rates(*n) {
+                                for (i, opt) in ins.iter().enumerate() {
+                                    if let Some(s) = opt {
+                                        let key = format!("pin:{}:in:{}", n, i);
+                                        let display_str = FractionalNumber::from_string(&s).map(|f| f.to_float_string()).unwrap_or(s.clone());
+                                        self.snarl_viewer.edit_buffers.insert(key, display_str);
+                                    }
+                                }
+                                for (i, opt) in outs.iter().enumerate() {
+                                    if let Some(s) = opt {
+                                        let key = format!("pin:{}:out:{}", n, i);
+                                        let display_str = FractionalNumber::from_string(&s).map(|f| f.to_float_string()).unwrap_or(s.clone());
+                                        self.snarl_viewer.edit_buffers.insert(key, display_str);
+                                    }
+                                }
+                            }
+                            if let Some((count_str, _)) = self.production_app.get_node_building_info(*n) {
+                                if !count_str.is_empty() {
+                                    let display_str = FractionalNumber::from_string(&count_str).map(|f| f.to_float_string()).unwrap_or(count_str);
+                                    self.snarl_viewer.edit_buffers.insert(format!("building:{}", n), display_str);
+                                } else {
+                                    self.snarl_viewer.edit_buffers.remove(&format!("building:{}", n));
+                                }
+                            }
+                            if let Some(group_rate) = self.production_app.get_group_rate(*n) {
+                                self.snarl_viewer.edit_buffers.insert(
+                                    format!("group_rate:{}", n),
+                                    group_rate.to_float_string()
+                                );
+                            }
+                            if let Some((same, last, _variable)) = self.production_app.get_node_power_info(*n) {
+                                let power_str = if self.snarl_viewer.power_equal_clocks { same } else { last };
+                                let power_display = FractionalNumber::from_string(&power_str).map(|f| f.to_float_string()).unwrap_or(power_str);
+                                self.snarl_viewer.edit_buffers.insert(format!("node:{}:power", n), power_display);
+                            }
+                        }
+                        for n in connected {
+                            nodes_to_refresh.push(n);
+                        }
                     }
                     Err(e) => {
                         self.emit_message(format!("Error: {}", e), log::Level::Error);
@@ -4901,6 +5101,13 @@ impl TemplateApp {
                             let key = format!("pin:{}:out:{}", node_id, i);
                             self.snarl_viewer.edit_buffers.insert(key, rate_f.to_float_string());
                         }
+                    }
+                    // Sync group rate buffer if this is a group node
+                    if let NodeDisplayData::Group { group, .. } = cached {
+                        self.snarl_viewer.edit_buffers.insert(
+                            format!("group_rate:{}", node_id),
+                            group.rate.to_float_string()
+                        );
                     }
                 }
             }

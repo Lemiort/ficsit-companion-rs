@@ -531,6 +531,60 @@ impl ProductionApp {
         Err("Node is not a group".into())
     }
 
+    /// Set the rate (building count multiplier) for a group node
+    pub fn set_group_rate(&mut self, node_id: u64, new_rate: FractionalNumber) -> Result<(), String> {
+        // Validate non-negative
+        if new_rate.numerator() < 0 {
+            return Err("Invalid rate".into());
+        }
+        let idx = self
+            .find_node_index(node_id)
+            .ok_or_else(|| format!("Node {} not found", node_id))?;
+        let node_any = &mut self.nodes[idx];
+        if let Some(group) = node_any.downcast_mut::<GroupNode>() {
+            // Apply new rate
+            let pin_id = {
+                group.update_rate(new_rate);
+                // prefer an output pin when available for propagation
+                if !group.base.outs.is_empty() {
+                    group.base.outs[0].id
+                } else if !group.base.ins.is_empty() {
+                    group.base.ins[0].id
+                } else {
+                    // no pins to propagate from - nothing to do
+                    return Ok(());
+                }
+            };
+            // Re-query the updated pin rate after borrow drop
+            let cur = if let Some(g2) = self.nodes[idx].downcast_ref::<GroupNode>() {
+                if !g2.base.outs.is_empty() {
+                    g2.base.outs[0].current_rate
+                } else if !g2.base.ins.is_empty() {
+                    g2.base.ins[0].current_rate
+                } else {
+                    FractionalNumber::default()
+                }
+            } else {
+                FractionalNumber::default()
+            };
+            // Propagate through graph using the selected pin as constraint
+            self.update_nodes_rate(pin_id, cur)
+                .map_err(|e| format!("Failed to propagate rates: {}", e))?;
+            return Ok(());
+        }
+        Err("Node is not a group".into())
+    }
+
+    /// Get the rate for a group node
+    pub fn get_group_rate(&self, node_id: u64) -> Option<FractionalNumber> {
+        let idx = self.find_node_index(node_id)?;
+        let node_any = &self.nodes[idx];
+        if let Some(group) = node_any.downcast_ref::<GroupNode>() {
+            return Some(group.current_rate);
+        }
+        None
+    }
+
     /// Apply a new rate typed by the user into a pin. Performs simple validation
     /// and, for some node kinds (e.g., Craft), derives and applies a new node rate.
     pub fn set_pin_rate(
@@ -653,15 +707,23 @@ impl ProductionApp {
             }
         }
 
-        // Group/Sink: set directly
+        // Group: derive group rate from pin rate (like CraftNode)
         if let Some(n) = self.nodes[node_idx].downcast_mut::<GroupNode>() {
             match direction {
                 PinDirection::Input => {
                     if pin_index >= n.base.ins.len() {
                         return Err("Input pin out of range".into());
                     }
+                    let base_rate = n.base.ins[pin_index].base_rate;
+                    if base_rate.numerator() == 0 {
+                        return Err("Base rate is zero".into());
+                    }
+                    let new_group_rate = new_rate / base_rate;
+                    if !crate::rate_calculator::validate_rate(&new_group_rate) {
+                        return Err("Derived group rate invalid".into());
+                    }
                     let pin_id = {
-                        n.base.ins[pin_index].current_rate = new_rate;
+                        n.update_rate(new_group_rate);
                         n.base.ins[pin_index].id
                     };
                     // drop mutable borrow
@@ -681,8 +743,16 @@ impl ProductionApp {
                     if pin_index >= n.base.outs.len() {
                         return Err("Output pin out of range".into());
                     }
+                    let base_rate = n.base.outs[pin_index].base_rate;
+                    if base_rate.numerator() == 0 {
+                        return Err("Base rate is zero".into());
+                    }
+                    let new_group_rate = new_rate / base_rate;
+                    if !crate::rate_calculator::validate_rate(&new_group_rate) {
+                        return Err("Derived group rate invalid".into());
+                    }
                     let pin_id = {
-                        n.base.outs[pin_index].current_rate = new_rate;
+                        n.update_rate(new_group_rate);
                         n.base.outs[pin_index].id
                     };
                     // drop mutable borrow
@@ -2451,14 +2521,8 @@ impl ProductionApp {
                     }
                     if let Some(new_node_rate) = chosen {
                         if new_node_rate != n.current_rate {
-                            n.current_rate = new_node_rate;
-                            // Propagate to pins
-                            for p in &mut n.base.ins {
-                                p.current_rate = p.base_rate * n.current_rate;
-                            }
-                            for p in &mut n.base.outs {
-                                p.current_rate = p.base_rate * n.current_rate;
-                            }
+                            // Use update_rate to also propagate to internal grouped nodes
+                            n.update_rate(new_node_rate);
                         }
                     }
                 }
@@ -2675,14 +2739,8 @@ impl ProductionApp {
                 }
                 if let Some(new_node_rate) = chosen {
                     if new_node_rate != n.current_rate {
-                        n.current_rate = new_node_rate;
-                        // Propagate to pins
-                        for p in &mut n.base.ins {
-                            p.current_rate = p.base_rate * n.current_rate;
-                        }
-                        for p in &mut n.base.outs {
-                            p.current_rate = p.base_rate * n.current_rate;
-                        }
+                        // Use update_rate to also propagate to internal grouped nodes
+                        n.update_rate(new_node_rate);
                     }
                 }
             }
@@ -3071,8 +3129,17 @@ impl ProductionApp {
                 group_node.current_rate = group.rate.clone().into();
 
                 // Recursively load grouped nodes
-                let (grouped_nodes, nodes_base_rate) = self.load_grouped_nodes(&group.nodes, game_data)?;
+                let (grouped_nodes, mut nodes_base_rate) = self.load_grouped_nodes(&group.nodes, game_data)?;
                 group_node.grouped_nodes = grouped_nodes;
+                
+                // The nodes_base_rate from load_grouped_nodes contains scaled rates.
+                // We need to convert to base rates (rate at group rate=1).
+                let saved_rate: FractionalNumber = group.rate.clone().into();
+                if saved_rate.numerator() != 0 {
+                    for rate in &mut nodes_base_rate {
+                        *rate = *rate / saved_rate;
+                    }
+                }
                 group_node.nodes_base_rate = nodes_base_rate;
 
                 // Load grouped links
@@ -3087,6 +3154,22 @@ impl ProductionApp {
 
                 // Create pins from grouped nodes
                 group_node.create_pins_from_grouped_nodes_with_id_gen(|| self.get_next_id());
+                
+                // The internal nodes' rates in the save file already include the group rate,
+                // so the aggregated pin current_rates are already correct.
+                // We need to compute the correct base_rate (rate at group rate=1).
+                let saved_rate: FractionalNumber = group.rate.clone().into();
+                if saved_rate.numerator() != 0 {
+                    for pin in group_node.base.ins.iter_mut() {
+                        // current_rate is already correct from aggregation
+                        // base_rate = current_rate / saved_rate
+                        pin.base_rate = pin.current_rate / saved_rate;
+                    }
+                    for pin in group_node.base.outs.iter_mut() {
+                        pin.base_rate = pin.current_rate / saved_rate;
+                    }
+                }
+                
                 group_node.compute_power_usage();
                 group_node.update_details();
 
@@ -4625,6 +4708,57 @@ impl ProductionApp {
         
         let group_pos = group_node.base.position;
         let group_rate = group_node.current_rate;
+
+        // Collect all external pin IDs from the group node
+        let mut group_pin_ids: Vec<u64> = Vec::new();
+        for pin in &group_node.base.ins {
+            group_pin_ids.push(pin.id);
+        }
+        for pin in &group_node.base.outs {
+            group_pin_ids.push(pin.id);
+        }
+
+        // Remove external links connected to the group node
+        self.links.retain(|link| {
+            !group_pin_ids.contains(&link.start_pin_id) && !group_pin_ids.contains(&link.end_pin_id)
+        });
+
+        // Also clear link_id references on pins of nodes that were connected to this group
+        for node_any in &mut self.nodes {
+            if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+                for pin in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if let Some(lid) = pin.link_id {
+                        if !self.links.iter().any(|l| l.id == lid) {
+                            pin.link_id = None;
+                        }
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_mut::<OrganizerNode>() {
+                for pin in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if let Some(lid) = pin.link_id {
+                        if !self.links.iter().any(|l| l.id == lid) {
+                            pin.link_id = None;
+                        }
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_mut::<crate::node::GroupNode>() {
+                for pin in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if let Some(lid) = pin.link_id {
+                        if !self.links.iter().any(|l| l.id == lid) {
+                            pin.link_id = None;
+                        }
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_mut::<SinkNode>() {
+                for pin in n.base.ins.iter_mut() {
+                    if let Some(lid) = pin.link_id {
+                        if !self.links.iter().any(|l| l.id == lid) {
+                            pin.link_id = None;
+                        }
+                    }
+                }
+            }
+        }
 
         // Remove the group node
         self.nodes.remove(group_idx);

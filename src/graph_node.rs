@@ -147,6 +147,8 @@ pub struct SinkData {
 #[derive(Clone, Debug, Default)]
 pub struct GroupData {
     pub is_built: bool,
+    pub rate: FractionalNumber,
+    pub locked: bool,
 }
 
 /// Per-frame display data cache for a node.
@@ -428,6 +430,11 @@ pub enum PendingChange {
         node_id: u64,
         name: String,
     },
+    /// Group rate change
+    GroupRate {
+        node_id: u64,
+        rate: FractionalNumber,
+    },
 }
 
 impl PendingChange {
@@ -508,5 +515,10 @@ impl PendingChange {
     /// Create a group name change
     pub fn group_name(node_id: u64, name: String) -> Self {
         Self::GroupName { node_id, name }
+    }
+
+    /// Create a group rate change
+    pub fn group_rate(node_id: u64, rate: FractionalNumber) -> Self {
+        Self::GroupRate { node_id, rate }
     }
 }
