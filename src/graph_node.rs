@@ -426,10 +426,7 @@ pub enum PendingChange {
         locked: bool,
     },
     /// Group name change
-    GroupName {
-        node_id: u64,
-        name: String,
-    },
+    GroupName { node_id: u64, name: String },
     /// Group rate change
     GroupRate {
         node_id: u64,

@@ -91,7 +91,8 @@ impl FractionalNumber {
             // If it's a digit or decimal point, or a unary '-' starting a numeric literal, parse the number
             let is_unary_minus = if c == '-' {
                 // Check next char exists and is a digit or '.'
-                let next_is_num = (i + 1) < chars.len() && (chars[i + 1].is_numeric() || chars[i + 1] == '.');
+                let next_is_num =
+                    (i + 1) < chars.len() && (chars[i + 1].is_numeric() || chars[i + 1] == '.');
                 if !next_is_num {
                     false
                 } else {
@@ -166,7 +167,12 @@ impl FractionalNumber {
 
         for token in postfix {
             let first_char = token.chars().next().unwrap();
-            if first_char.is_numeric() || first_char == '.' || (first_char == '-' && token.len() > 1 && (token.chars().nth(1).unwrap().is_numeric() || token.chars().nth(1).unwrap() == '.'))
+            if first_char.is_numeric()
+                || first_char == '.'
+                || (first_char == '-'
+                    && token.len() > 1
+                    && (token.chars().nth(1).unwrap().is_numeric()
+                        || token.chars().nth(1).unwrap() == '.'))
             {
                 // Parse number (allowing a leading negative sign)
                 if let Some(slash_pos) = token.find('/') {

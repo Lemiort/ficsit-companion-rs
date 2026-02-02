@@ -1,5 +1,5 @@
 use crate::building::Building;
-use crate::fractional_number::{self, FractionalNumber};
+use crate::fractional_number::FractionalNumber;
 use crate::recipe::{CountedItem, Item, Recipe};
 use serde_json::Value;
 use std::collections::HashMap;

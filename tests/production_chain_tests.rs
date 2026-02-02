@@ -280,7 +280,7 @@ fn test_organizer_ins_outs_saved() {
 
     // Create a merger and set its item name so pins have item metadata
     let merger_id = app.add_merger_node();
-    app.set_node_item_name(merger_id, Some("Iron Ore".to_string()))
+    app.set_node_item_name(merger_id, Some("Iron Ore".to_owned()))
         .expect("Failed to set item name");
 
     // Lock the first input pin (isolated node -> only that pin gets locked)

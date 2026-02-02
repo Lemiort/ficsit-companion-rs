@@ -127,12 +127,6 @@ impl SnarlViewer {
         self.settings = new_settings.clone();
     }
 
-    /// Drain all pending changes - returns the unified changes queue
-    #[allow(dead_code)]
-    fn drain_changes(&mut self) -> Vec<PendingChange> {
-        std::mem::take(&mut self.pending_changes)
-    }
-
     // Compatibility methods that drain specific types from pending_changes
     // These allow the existing processing loop to work while we migrate to the unified approach
 
@@ -617,7 +611,7 @@ impl SnarlViewer {
                         group.rate = rate;
                     }
                     // Group rate is locked if any pin is locked
-                    group.locked = pins.input_locked.iter().any(|&l| l) 
+                    group.locked = pins.input_locked.iter().any(|&l| l)
                         || pins.output_locked.iter().any(|&l| l);
                     NodeDisplayData::Group {
                         id: node_id,
@@ -638,16 +632,6 @@ impl SnarlViewer {
             .insert((node_id, dir, idx), std::time::Instant::now());
     }
 
-    // Return true if the pin edit was successful recently (within 1.5s)
-    #[allow(dead_code)]
-    fn is_pin_recent_success(&self, node_id: u64, dir: PinDirection, idx: usize) -> bool {
-        if let Some(t) = self.pin_success.get(&(node_id, dir, idx)) {
-            t.elapsed().as_secs_f32() < 1.5
-        } else {
-            false
-        }
-    }
-
     // Render a fractional number input similar to C++ RenderInputText.
     // Accepts a FractionalNumber value to display; returns (Response, Option<parsed>) where
     // the Option carries a parsed FractionalNumber when the user submitted/committed the field.
@@ -655,7 +639,7 @@ impl SnarlViewer {
         &mut self,
         ui: &mut egui::Ui,
         key: &str,
-        initial_value: &mut crate::fractional_number::FractionalNumber,
+        initial_value: &crate::fractional_number::FractionalNumber,
         width: f32,
         disabled: bool,
     ) -> Option<FractionalNumber> {
@@ -688,7 +672,6 @@ impl SnarlViewer {
     /// Shared add-node menu renderer for both graph menu and dropped-wire menu
     fn draw_add_node_menu_contents(
         &mut self,
-        pos: egui::Pos2,
         ui: &mut egui::Ui,
         filter_item: Option<&str>,
         filter_by_output: bool,
@@ -710,14 +693,19 @@ impl SnarlViewer {
                     ui.visuals().widgets.hovered.bg_fill,
                 );
             }
-            let mut child_ui =
-                ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center), None);
-            child_ui.spacing_mut().button_padding = egui::vec2(8.0, 0.0);
-            child_ui.style_mut().interaction.selectable_labels = false;
-            let text_response = child_ui.label(label);
-            if !tooltip.is_empty() {
-                text_response.on_hover_text(tooltip);
-            }
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                |ui| {
+                    ui.spacing_mut().button_padding = egui::vec2(8.0, 0.0);
+                    ui.style_mut().interaction.selectable_labels = false;
+                    let text_response = ui.label(label);
+                    if !tooltip.is_empty() {
+                        text_response.on_hover_text(tooltip);
+                    }
+                },
+            );
             response.clicked()
         };
 
@@ -866,14 +854,16 @@ impl SnarlViewer {
                                         ui.visuals().widgets.hovered.bg_fill,
                                     );
                                 }
-                                let mut child_ui = ui.child_ui(
-                                    rect,
-                                    egui::Layout::left_to_right(egui::Align::Center),
-                                    None,
+                                ui.scope_builder(
+                                    egui::UiBuilder::new()
+                                        .max_rect(rect)
+                                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                                    |ui| {
+                                        ui.spacing_mut().button_padding = egui::vec2(8.0, 0.0);
+                                        ui.style_mut().interaction.selectable_labels = false;
+                                        let _text_response = ui.label(&recipe.display_name);
+                                    },
                                 );
-                                child_ui.spacing_mut().button_padding = egui::vec2(8.0, 0.0);
-                                child_ui.style_mut().interaction.selectable_labels = false;
-                                let _text_response = child_ui.label(&recipe.display_name);
 
                                 ui.horizontal(|ui| {
                                     ui.set_width(icon_column_width);
@@ -1041,9 +1031,11 @@ impl SnarlViewer {
                 // Queue update to ProductionApp when a connection provides an item.
                 // Always push the change when chosen.is_some() to ensure propagation
                 // even if cache is stale. Do not clear when disconnected (chosen == None).
-                if let Some(ref item_name) = chosen {
-                    self.pending_changes
-                        .push(PendingChange::item(node_display_id, Some(item_name.clone())));
+                if let Some(item_name) = chosen.as_ref() {
+                    self.pending_changes.push(PendingChange::item(
+                        node_display_id,
+                        Some(item_name.clone()),
+                    ));
                 }
             }
             GraphNodeType::Sink => {
@@ -1115,9 +1107,11 @@ impl SnarlViewer {
                 // Queue update to ProductionApp when a connection provides an item.
                 // Always push the change when chosen.is_some() to ensure propagation
                 // even if cache is stale. Do not clear when disconnected (chosen == None).
-                if let Some(ref item_name) = chosen {
-                    self.pending_changes
-                        .push(PendingChange::item(node_display_id, Some(item_name.clone())));
+                if let Some(item_name) = chosen.as_ref() {
+                    self.pending_changes.push(PendingChange::item(
+                        node_display_id,
+                        Some(item_name.clone()),
+                    ));
                 }
             }
             _ => {}
@@ -1127,70 +1121,6 @@ impl SnarlViewer {
     /// Provide a lightweight name -> TextureId map so the viewer can resolve icons during connect/sync
     fn set_icon_map(&mut self, map: std::collections::HashMap<String, egui::TextureId>) {
         self.icon_map = map;
-    }
-
-    // Helper to render a '+' in the footer aligned to a column depending on direction
-    // Input -> column 1 (left) | Output -> column 3 (right)
-    fn render_footer_add_button_middle(
-        &mut self,
-        ui: &mut egui::Ui,
-        node: &NodeDisplayData,
-        dir: PinDirection,
-    ) {
-        egui::Grid::new(format!(
-            "footer_add_col:{}:{}",
-            node.id(),
-            match dir {
-                PinDirection::Input => "in",
-                PinDirection::Output => "out",
-            }
-        ))
-        .num_columns(3)
-        .spacing([8.0, 8.0])
-        .min_col_width(ui.available_width() / 3.0)
-        .show(ui, |ui| {
-            match dir {
-                PinDirection::Input => {
-                    // Place in first column with left inset
-                    ui.horizontal(|ui| {
-                        ui.add_space(Self::FOOTER_ADD_INSET);
-                        if ui
-                            .add(
-                                egui::Button::new("+")
-                                    .corner_radius(egui::CornerRadius::same(0))
-                                    .small(),
-                            )
-                            .clicked()
-                        {
-                            self.pending_changes
-                                .push(PendingChange::add_pin(node.id(), dir));
-                        }
-                    });
-                    ui.horizontal(|ui| {});
-                    ui.horizontal(|ui| {});
-                }
-                PinDirection::Output => {
-                    ui.horizontal(|ui| {});
-                    ui.horizontal(|ui| {});
-                    // Place in third column with right inset using RTL layout
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(Self::FOOTER_ADD_INSET);
-                        if ui
-                            .add(
-                                egui::Button::new("+")
-                                    .corner_radius(egui::CornerRadius::same(0))
-                                    .small(),
-                            )
-                            .clicked()
-                        {
-                            self.pending_changes
-                                .push(PendingChange::add_pin(node.id(), dir));
-                        }
-                    });
-                }
-            }
-            ui.end_row();
-        });
     }
 
     // Footer helper methods (placed in regular impl block, not trait impl)
@@ -1424,7 +1354,7 @@ impl SnarlViewer {
                     let key = format!("group_rate:{}", node_id);
                     // Locked if UI-locked or if any pin is locked (connected)
                     let is_locked = self.ui_locked_nodes.contains(&node_id) || group.locked;
-                    
+
                     // Calculate width for rate input
                     let rate_width = ui
                         .painter()
@@ -1437,13 +1367,8 @@ impl SnarlViewer {
                         .x
                         + 8.0;
 
-                    let response = self.render_fractional_input(
-                        ui,
-                        &key,
-                        &mut rate,
-                        rate_width,
-                        is_locked,
-                    );
+                    let response =
+                        self.render_fractional_input(ui, &key, &mut rate, rate_width, is_locked);
 
                     if let Some(new_value) = response {
                         self.pending_changes
@@ -1549,28 +1474,34 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                 .show(ui, |ui| {
                     // skip first column
                     ui.horizontal(|_ui| {});
-                    
+
                     if is_group {
                         // Editable group name
                         let label = cached
                             .map(|c| c.label().to_string())
-                            .unwrap_or_else(|| "Group".to_string());
+                            .unwrap_or_else(|| "Group".to_owned());
                         let key = format!("group_name_{}", node_graph_id);
-                        let buf = self.edit_buffers.entry(key.clone()).or_insert_with(|| label.clone());
-                        
+                        let buf = self
+                            .edit_buffers
+                            .entry(key.clone())
+                            .or_insert_with(|| label.clone());
+
                         let response = ui.add(
                             egui::TextEdit::singleline(buf)
                                 .desired_width(ui.available_width() * 0.8)
-                                .hint_text("Group name")
+                                .hint_text("Group name"),
                         );
-                        
+
                         // Commit on Enter or lost focus
-                        if response.lost_focus() || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                        if response.lost_focus()
+                            || (response.has_focus()
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                        {
                             let new_name = self.edit_buffers.get(&key).cloned().unwrap_or_default();
                             if new_name != label {
-                                self.pending_changes.push(PendingChange::GroupName { 
-                                    node_id: node_graph_id, 
-                                    name: new_name 
+                                self.pending_changes.push(PendingChange::GroupName {
+                                    node_id: node_graph_id,
+                                    name: new_name,
                                 });
                             }
                         }
@@ -1911,7 +1842,7 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
                 NodeDisplayData::Merger { .. }
                 | NodeDisplayData::GameSplitter { .. }
                 | NodeDisplayData::CustomSplitter { .. }
-                | NodeDisplayData::Sink { .. } 
+                | NodeDisplayData::Sink { .. }
                 | NodeDisplayData::Group { .. } => true,
             }
         } else {
@@ -1934,26 +1865,24 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
             return;
         };
 
-        ui.vertical(|ui| {
-            match &node {
-                NodeDisplayData::Craft {
-                    id, pins, craft, ..
-                } => {
-                    self.render_craft_footer(ui, *id, pins, craft);
-                }
-                NodeDisplayData::Merger { id, organizer, .. } => {
-                    self.render_organizer_footer(ui, *id, organizer, PinDirection::Input);
-                }
-                NodeDisplayData::GameSplitter { id, organizer, .. }
-                | NodeDisplayData::CustomSplitter { id, organizer, .. } => {
-                    self.render_organizer_footer(ui, *id, organizer, PinDirection::Output);
-                }
-                NodeDisplayData::Sink { id, sink, .. } => {
-                    self.render_sink_footer(ui, *id, sink);
-                }
-                NodeDisplayData::Group { id, group, .. } => {
-                    self.render_group_footer(ui, *id, group);
-                }
+        ui.vertical(|ui| match &node {
+            NodeDisplayData::Craft {
+                id, pins, craft, ..
+            } => {
+                self.render_craft_footer(ui, *id, pins, craft);
+            }
+            NodeDisplayData::Merger { id, organizer, .. } => {
+                self.render_organizer_footer(ui, *id, organizer, PinDirection::Input);
+            }
+            NodeDisplayData::GameSplitter { id, organizer, .. }
+            | NodeDisplayData::CustomSplitter { id, organizer, .. } => {
+                self.render_organizer_footer(ui, *id, organizer, PinDirection::Output);
+            }
+            NodeDisplayData::Sink { id, sink, .. } => {
+                self.render_sink_footer(ui, *id, sink);
+            }
+            NodeDisplayData::Group { id, group, .. } => {
+                self.render_group_footer(ui, *id, group);
             }
         });
     }
@@ -2059,7 +1988,7 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
         // treat it as a request to find recipes that *produce* that item (filter by outputs).
         let filter_by_output = ins.is_some() || detected_from_node_item;
         if let Some(choice) =
-            self.draw_add_node_menu_contents(pos, ui, detected_item.as_deref(), filter_by_output)
+            self.draw_add_node_menu_contents(ui, detected_item.as_deref(), filter_by_output)
         {
             self.pending_dropped_wire = Some(PendingDroppedWire {
                 pos,
@@ -2078,7 +2007,7 @@ impl egui_snarl::ui::SnarlViewer<GraphNode> for SnarlViewer {
         ui: &mut egui::Ui,
         _snarl: &mut egui_snarl::Snarl<GraphNode>,
     ) {
-        if let Some(choice) = self.draw_add_node_menu_contents(pos, ui, None, false) {
+        if let Some(choice) = self.draw_add_node_menu_contents(ui, None, false) {
             self.pending_dropped_wire = Some(PendingDroppedWire {
                 pos,
                 src_outs: None,
@@ -2351,6 +2280,12 @@ impl Default for TemplateApp {
 
         let mut snarl_style = egui_snarl::ui::SnarlStyle::new();
         snarl_style.collapsible = Some(false);
+        // Enable grid background pattern (32px spacing to match C++ imgui-node-editor default)
+        snarl_style.bg_pattern = Some(egui_snarl::ui::BackgroundPattern::grid(
+            egui::vec2(32.0, 32.0),
+            0.0, // angle in radians (0 = horizontal/vertical grid)
+        ));
+        snarl_style.bg_pattern_stroke = Some(egui::Stroke::new(1.0, egui::Color32::from_gray(60)));
 
         let initial_settings = Settings::new();
         let mut app = Self {
@@ -2714,11 +2649,19 @@ impl TemplateApp {
     /// Recursively add recipe breakdown from grouped nodes
     fn add_grouped_recipe_breakdown(
         grouped_nodes: &[crate::node::GroupedNode],
-        recipe_breakdown: &mut std::collections::HashMap<String, std::collections::HashMap<String, crate::fractional_number::FractionalNumber>>,
+        recipe_breakdown: &mut std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, crate::fractional_number::FractionalNumber>,
+        >,
     ) {
         for gn in grouped_nodes {
             match &gn.node_data {
-                crate::node::GroupedNodeData::Craft { building_name, recipe_name, current_rate, .. } => {
+                crate::node::GroupedNodeData::Craft {
+                    building_name,
+                    recipe_name,
+                    current_rate,
+                    ..
+                } => {
                     recipe_breakdown
                         .entry(building_name.clone())
                         .or_insert_with(std::collections::HashMap::new)
@@ -2805,7 +2748,7 @@ impl TemplateApp {
                 });
         } else {
             // Compute 20% of the window width (clamped to a reasonable min)
-            let panel_width = (ctx.input(|i| i.screen_rect().width()) * 0.2).max(120.0);
+            let panel_width = (ctx.input(|i| i.content_rect().width()) * 0.2).max(120.0);
             egui::SidePanel::left("left_panel")
                 .resizable(false)
                 .exact_width(panel_width)
@@ -2823,7 +2766,7 @@ impl TemplateApp {
 
                         let is_web = cfg!(target_arch = "wasm32");
 
-                        if is_web{ 
+                        if is_web{
                             if ui.button("Export").on_hover_text("Export current production chain to disk").clicked() {
                                  // !TODO: Implement export functionality
                                  //const std::string path = "production_chain.fcs";
@@ -2847,7 +2790,7 @@ impl TemplateApp {
                                 }
                             });
                     });
-            
+
                     // Save/Load section
                     ui.group(|ui| {
                         ui.horizontal_wrapped(|ui| {
@@ -2910,7 +2853,7 @@ impl TemplateApp {
                             }
                         }
 
-                        
+
                             if ui.button("Save").on_hover_text("Save current production chain").clicked() {
                                 if !self.save_name.is_empty() {
                                     // Sync UI node positions back into the production model so saves capture current layout
@@ -3098,7 +3041,7 @@ impl TemplateApp {
                                         let built = built_machines.get(name).copied().unwrap_or_default();
                                         let pct = if total.value() == 0.0 { 0.0f32 } else { (built.value() / total.value()) as f32 };
                                         let spacing_width = ui.spacing().item_spacing.x*2.0;
-                                        ui.horizontal(| ui | { 
+                                        ui.horizontal(| ui | {
                                             ui.add_space(spacing_width);
                                             ui.label(name);
                                         });
@@ -3114,7 +3057,7 @@ impl TemplateApp {
                     }
 
                     self.separator_text_left(ui, "Average Power Consumption");
-                    
+
                     let resp = ui.checkbox(&mut self.power_equal_clocks, "Compute power with equal clocks");
                     if resp.changed() {
                             // Immediate update in viewer
@@ -3184,7 +3127,7 @@ impl TemplateApp {
                             + 8.0;
                         let id = ui.make_persistent_id("power_breakdown");
                         let spacing_width = ui.spacing().item_spacing.x * 2.0;
-                        let header_result = egui::collapsing_header::CollapsingState::load_with_default_open(
+                        let _header_result = egui::collapsing_header::CollapsingState::load_with_default_open(
                             ui.ctx(),
                             id,
                             false,
@@ -3266,7 +3209,7 @@ impl TemplateApp {
                     for node_any in &self.production_app.nodes {
                         if let Some(n) = node_any.downcast_ref::<crate::node::SinkNode>() {
                             for p in &n.base.ins {
-                                if let Some(ref item_name) = p.item_name {
+                                if let Some(item_name) = p.item_name.as_ref() {
                                     if let Some(item_rc) = self.game_data.items.get(item_name.as_str()) {
                                         let pts = p.current_rate.clone() * FractionalNumber::from(item_rc.sink_value as i64);
                                         total_sink_points += pts.clone();
@@ -3308,7 +3251,7 @@ impl TemplateApp {
 
                         let id = ui.make_persistent_id("sink_points");
                         let spacing_width = ui.spacing().item_spacing.x * 2.0;
-                        let header_result = egui::collapsing_header::CollapsingState::load_with_default_open(
+                        let _header_result = egui::collapsing_header::CollapsingState::load_with_default_open(
                             ui.ctx(),
                             id,
                             false,
@@ -3354,7 +3297,7 @@ impl TemplateApp {
                                             ui.label(name).on_hover_text(name);
                                         });
 
-                                        
+
                                         ui.end_row();
                                     }
                                 });
@@ -3510,7 +3453,7 @@ impl TemplateApp {
                     for node_any in &self.production_app.nodes {
                         if let Some(craft) = node_any.downcast_ref::<crate::node::CraftNode>() {
                             for p in craft.base.outs.iter() {
-                                if let Some(ref item_name) = p.item_name {
+                                if let Some(item_name) = p.item_name.as_ref() {
                                     produced_total
                                         .entry(item_name.clone())
                                         .and_modify(|v| *v += p.current_rate.clone())
@@ -3524,7 +3467,7 @@ impl TemplateApp {
                                 }
                             }
                             for p in craft.base.ins.iter() {
-                                if let Some(ref item_name) = p.item_name {
+                                if let Some(item_name) = p.item_name.as_ref() {
                                     if p.link_id.is_none() {
                                         unconnected_input_sum
                                             .entry(item_name.clone())
@@ -3535,7 +3478,7 @@ impl TemplateApp {
                             }
                         } else if let Some(sink) = node_any.downcast_ref::<crate::node::SinkNode>() {
                             for p in sink.base.ins.iter() {
-                                if let Some(ref item_name) = p.item_name {
+                                if let Some(item_name) = p.item_name.as_ref() {
                                     if p.link_id.is_none() {
                                         unconnected_input_sum
                                             .entry(item_name.clone())
@@ -3546,7 +3489,7 @@ impl TemplateApp {
                             }
                         } else if let Some(group) = node_any.downcast_ref::<crate::node::GroupNode>() {
                             for p in group.base.outs.iter() {
-                                if let Some(ref item_name) = p.item_name {
+                                if let Some(item_name) = p.item_name.as_ref() {
                                     produced_total
                                         .entry(item_name.clone())
                                         .and_modify(|v| *v += p.current_rate.clone())
@@ -3654,9 +3597,9 @@ impl TemplateApp {
 
             // Helper to connect pending dropped wire to newly inserted node's corresponding pins
             fn connect_pending_wire_to_node(app: &mut TemplateApp, pending: &PendingDroppedWire, new_node: egui_snarl::NodeId) {
-                log::info!("[AUTO-WIRE] connect_pending_wire_to_node called: new_node={:?}, src_outs={:?}, src_ins={:?}", 
+                log::info!("[AUTO-WIRE] connect_pending_wire_to_node called: new_node={:?}, src_outs={:?}, src_ins={:?}",
                     new_node, pending.src_outs, pending.src_ins);
-                
+
                 // If the dropped source was an Out pin (source->new node input), connect each out to the matching input (by item name) or corresponding index
                 if let Some(outs) = pending.src_outs.as_ref() {
                     for out in outs.iter() {
@@ -3679,7 +3622,7 @@ impl TemplateApp {
                         }
 
                         // Prefer to match by item name if the dropped wire had a detected item
-                        let dest_idx = if let Some(ref item_name) = pending.src_item_name {
+                        let dest_idx = if let Some(item_name) = pending.src_item_name.as_ref() {
                             app.snarl_viewer.node_cache.get(&node_prod_id)
                                 .and_then(|c| c.pins().input_items.iter()
                                     .position(|opt| opt.as_ref().map(|s| s.name == *item_name).unwrap_or(false)))
@@ -3839,7 +3782,7 @@ impl TemplateApp {
                         }
 
                         // Prefer to match by item name if the dropped wire had a detected item
-                        let out_idx = if let Some(ref item_name) = pending.src_item_name {
+                        let out_idx = if let Some(item_name) = pending.src_item_name.as_ref() {
                             app.snarl_viewer.node_cache.get(&node_prod_id)
                                 .and_then(|c| c.pins().output_items.iter()
                                     .position(|opt| opt.as_ref().map(|s| s.name == *item_name).unwrap_or(false)))
@@ -4009,7 +3952,7 @@ impl TemplateApp {
                 &self.game_data,
             );
 
-            let snarl_response = egui_snarl::ui::SnarlWidget::new()
+            let _snarl_response = egui_snarl::ui::SnarlWidget::new()
                 .id(egui::Id::new("production-snarl"))
                 .style(self.snarl_style)
                 .show(&mut self.snarl, &mut self.snarl_viewer, ui);
@@ -4019,7 +3962,7 @@ impl TemplateApp {
             self.settings.unlocked_alts = self.snarl_viewer.recipe_checkbox_state.clone();
 
             if let Some(pending) = self.snarl_viewer.drain_pending_dropped_wire() {
-                match pending.choice {
+                match &pending.choice {
                     DroppedWireChoice::Merger => {
                         let node_id = self.production_app.add_merger_node();
                         let gn = Self::build_graph_node(node_id, GraphNodeType::Merger);
@@ -4078,8 +4021,8 @@ impl TemplateApp {
                         connect_pending_wire_to_node(self, &pending, new_ui_node);
                         self.emit_message("Created Sink", log::Level::Info);
                     }
-                    DroppedWireChoice::Craft(ref opt_name) => {
-                        if let Some(recipe_name) = opt_name {
+                    DroppedWireChoice::Craft(opt_name) => {
+                        if let Some(recipe_name) = opt_name.as_ref() {
                             match self.production_app.add_craft_node(&recipe_name, &self.game_data) {
                                 Ok(node_id) => {
                                     let gn = Self::build_graph_node(node_id, GraphNodeType::Craft);
@@ -4145,7 +4088,7 @@ impl TemplateApp {
                                     }
                                 }
                             }
-                            
+
                             // Also update building count and power edit buffers
                             if let Some((count_str, _)) = self.production_app.get_node_building_info(node_id) {
                                 if !count_str.is_empty() {
@@ -4272,7 +4215,7 @@ impl TemplateApp {
                                 // Check if any connected pin is locked and we need to propagate
                                 let mut should_lock_start_pin = false;
                                 let mut should_lock_end_pin = false;
-                                
+
                                 // Check output node (start pin): if node is UI-locked or has any locked pin
                                 if self.snarl_viewer.ui_locked_nodes.contains(&out_prod) {
                                     should_lock_start_pin = true;
@@ -4293,7 +4236,7 @@ impl TemplateApp {
                                         }
                                     }
                                 }
-                                
+
                                 // Check input node (end pin): if node is UI-locked or has any locked pin
                                 if self.snarl_viewer.ui_locked_nodes.contains(&in_prod) {
                                     should_lock_start_pin = true;
@@ -4319,7 +4262,7 @@ impl TemplateApp {
                                 // For other nodes, use set_node_locked_and_get_affected to lock all connected components
                                 if should_lock_start_pin || should_lock_end_pin {
                                     let mut all_affected: std::collections::HashSet<u64> = std::collections::HashSet::new();
-                                    
+
                                     // Lock start pin (output) - use pin-level for Merger/CustomSplitter
                                     if should_lock_start_pin {
                                         if out_is_pin_level {
@@ -4347,7 +4290,7 @@ impl TemplateApp {
                                             }
                                         }
                                     }
-                                    
+
                                     // Lock end pin (input) - use pin-level for Merger/CustomSplitter
                                     if should_lock_end_pin {
                                         if in_is_pin_level {
@@ -4416,7 +4359,7 @@ impl TemplateApp {
                                 // Check if any connected pin is locked and we need to propagate
                                 let mut should_lock_start_pin = false;
                                 let mut should_lock_end_pin = false;
-                                
+
                                 // Check output node (start pin): if node is UI-locked or has any locked pin
                                 if self.snarl_viewer.ui_locked_nodes.contains(&out_prod) {
                                     should_lock_start_pin = true;
@@ -4437,7 +4380,7 @@ impl TemplateApp {
                                         }
                                     }
                                 }
-                                
+
                                 // Check input node (end pin): if node is UI-locked or has any locked pin
                                 if self.snarl_viewer.ui_locked_nodes.contains(&in_prod) {
                                     should_lock_start_pin = true;
@@ -4463,7 +4406,7 @@ impl TemplateApp {
                                 // For other nodes, use set_node_locked_and_get_affected to lock all connected components
                                 if should_lock_start_pin || should_lock_end_pin {
                                     let mut all_affected: std::collections::HashSet<u64> = std::collections::HashSet::new();
-                                    
+
                                     // Lock start pin (output) - use pin-level for Merger/CustomSplitter
                                     if should_lock_start_pin {
                                         if out_is_pin_level {
@@ -4491,7 +4434,7 @@ impl TemplateApp {
                                             }
                                         }
                                     }
-                                    
+
                                     // Lock end pin (input) - use pin-level for Merger/CustomSplitter
                                     if should_lock_end_pin {
                                         if in_is_pin_level {
@@ -4723,7 +4666,7 @@ impl TemplateApp {
             if ctx.input(|i| i.key_pressed(egui::Key::G) && i.modifiers.command) {
                 let snarl_widget = egui_snarl::ui::SnarlWidget::new().id(egui::Id::new("production-snarl"));
                 let selected = snarl_widget.get_selected_nodes(ui);
-                
+
                 if selected.len() == 1 {
                     // Single node selected - check if it's a group to ungroup
                     if let Some(snarl_node) = selected.first() {
@@ -4753,7 +4696,7 @@ impl TemplateApp {
                     let prod_node_ids: Vec<u64> = selected.iter()
                         .filter_map(|snarl_idx| self.snarl.get_node(*snarl_idx).map(|n| n.id))
                         .collect();
-                    
+
                     if !prod_node_ids.is_empty() {
                         match self.production_app.group_nodes(&prod_node_ids) {
                             Ok(group_id) => {
@@ -4804,7 +4747,7 @@ impl TemplateApp {
                             node_id,
                             rate.to_fraction_string()
                         );
-                        
+
                         // Update edit buffers immediately so UI reflects changes
                         // Update own pins and group rate buffer
                         if let Some((ins, outs)) = self.production_app.get_node_pin_rates(node_id) {
@@ -4829,7 +4772,7 @@ impl TemplateApp {
                                 group_rate.to_float_string()
                             );
                         }
-                        
+
                         // Expand refresh set to all nodes in the connected component
                         use std::collections::HashSet;
                         let mut connected: HashSet<u64> = HashSet::new();
@@ -4994,7 +4937,7 @@ impl TemplateApp {
                 if let Some(pin_id) = self.production_app.get_pin_id(node_id, direction, pin_index) {
                     match self.production_app.set_pin_locked(pin_id, locked) {
                         Ok(()) => {
-                            log::info!("[UI] applied set_pin_locked: node={} dir={:?} idx={} locked={}", 
+                            log::info!("[UI] applied set_pin_locked: node={} dir={:?} idx={} locked={}",
                                 node_id, direction, pin_index, locked);
                             nodes_to_refresh.push(node_id);
                         }
@@ -5003,7 +4946,7 @@ impl TemplateApp {
                         }
                     }
                 } else {
-                    self.emit_message("Could not find pin to lock".to_string(), log::Level::Error);
+                    self.emit_message("Could not find pin to lock".to_owned(), log::Level::Error);
                 }
             }
 
@@ -5087,7 +5030,7 @@ impl TemplateApp {
                     self.item_icon_cache.get("Somersloop").map(|h| h.id()),
                     &self.game_data,
                 );
-                
+
                 // Sync edit buffers from the updated cache
                 if let Some(cached) = self.snarl_viewer.node_cache.get(node_id) {
                     for (i, opt) in cached.pins().input_rates.iter().enumerate() {

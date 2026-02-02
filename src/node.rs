@@ -447,33 +447,52 @@ impl GroupNode {
                 GroupedNodeData::Craft { ins, outs, .. } => {
                     for pin in ins {
                         if let Some(name) = &pin.item_name {
-                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                            *self
+                                .inputs
+                                .entry(name.clone())
+                                .or_insert(FractionalNumber::default()) += pin.current_rate;
                         }
                     }
                     for pin in outs {
                         if let Some(name) = &pin.item_name {
-                            *self.outputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                            *self
+                                .outputs
+                                .entry(name.clone())
+                                .or_insert(FractionalNumber::default()) += pin.current_rate;
                         }
                     }
                 }
-                GroupedNodeData::Group { ins: sub_inputs, outs: sub_outputs, .. } => {
+                GroupedNodeData::Group {
+                    ins: sub_inputs,
+                    outs: sub_outputs,
+                    ..
+                } => {
                     // For nested groups, we'd need to recursively get inputs/outputs
                     // For simplicity, use the stored group pins
                     for pin in sub_inputs {
                         if let Some(name) = &pin.item_name {
-                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                            *self
+                                .inputs
+                                .entry(name.clone())
+                                .or_insert(FractionalNumber::default()) += pin.current_rate;
                         }
                     }
                     for pin in sub_outputs {
                         if let Some(name) = &pin.item_name {
-                            *self.outputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                            *self
+                                .outputs
+                                .entry(name.clone())
+                                .or_insert(FractionalNumber::default()) += pin.current_rate;
                         }
                     }
                 }
                 GroupedNodeData::Sink { ins, .. } => {
                     for pin in ins {
                         if let Some(name) = &pin.item_name {
-                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                            *self
+                                .inputs
+                                .entry(name.clone())
+                                .or_insert(FractionalNumber::default()) += pin.current_rate;
                         }
                     }
                 }
@@ -546,12 +565,18 @@ impl GroupNode {
                 GroupedNodeData::Craft { ins, outs, .. } => {
                     for pin in ins {
                         if let Some(name) = &pin.item_name {
-                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                            *self
+                                .inputs
+                                .entry(name.clone())
+                                .or_insert(FractionalNumber::default()) += pin.current_rate;
                         }
                     }
                     for pin in outs {
                         if let Some(name) = &pin.item_name {
-                            *self.outputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                            *self
+                                .outputs
+                                .entry(name.clone())
+                                .or_insert(FractionalNumber::default()) += pin.current_rate;
                         }
                     }
                 }
@@ -559,19 +584,28 @@ impl GroupNode {
                     // Use the stored group pins for nested groups
                     for pin in ins {
                         if let Some(name) = &pin.item_name {
-                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                            *self
+                                .inputs
+                                .entry(name.clone())
+                                .or_insert(FractionalNumber::default()) += pin.current_rate;
                         }
                     }
                     for pin in outs {
                         if let Some(name) = &pin.item_name {
-                            *self.outputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                            *self
+                                .outputs
+                                .entry(name.clone())
+                                .or_insert(FractionalNumber::default()) += pin.current_rate;
                         }
                     }
                 }
                 GroupedNodeData::Sink { ins, .. } => {
                     for pin in ins {
                         if let Some(name) = &pin.item_name {
-                            *self.inputs.entry(name.clone()).or_insert(FractionalNumber::default()) += pin.current_rate;
+                            *self
+                                .inputs
+                                .entry(name.clone())
+                                .or_insert(FractionalNumber::default()) += pin.current_rate;
                         }
                     }
                 }
@@ -627,7 +661,7 @@ impl GroupNode {
     /// Update the group rate and propagate to contained nodes
     pub fn update_rate(&mut self, new_rate: FractionalNumber) {
         self.current_rate = new_rate;
-        
+
         // Update pins proportionally
         for pin in &mut self.base.ins {
             pin.current_rate = pin.base_rate * new_rate;
@@ -640,9 +674,14 @@ impl GroupNode {
         for (i, grouped_node) in self.grouped_nodes.iter_mut().enumerate() {
             let base_rate = self.nodes_base_rate.get(i).cloned().unwrap_or_default();
             let scaled_rate = base_rate * new_rate;
-            
+
             match &mut grouped_node.node_data {
-                GroupedNodeData::Craft { current_rate, ins, outs, .. } => {
+                GroupedNodeData::Craft {
+                    current_rate,
+                    ins,
+                    outs,
+                    ..
+                } => {
                     *current_rate = scaled_rate;
                     // Scale internal pins too
                     for pin in ins.iter_mut() {
@@ -665,7 +704,12 @@ impl GroupNode {
                         pin.current_rate = pin.base_rate * new_rate;
                     }
                 }
-                GroupedNodeData::Group { current_rate, ins, outs, .. } => {
+                GroupedNodeData::Group {
+                    current_rate,
+                    ins,
+                    outs,
+                    ..
+                } => {
                     *current_rate = scaled_rate;
                     for pin in ins.iter_mut() {
                         pin.current_rate = pin.base_rate * new_rate;
@@ -688,35 +732,42 @@ impl GroupNode {
         self.variable_power = false;
 
         for (i, grouped_node) in self.grouped_nodes.iter().enumerate() {
-            if let GroupedNodeData::Craft { 
-                recipe_power, 
-                power_exponent, 
+            if let GroupedNodeData::Craft {
+                recipe_power,
+                power_exponent,
                 somersloop_power_exponent,
                 somersloop_mult,
                 num_somersloop,
                 variable_power,
                 ..
-            } = &grouped_node.node_data {
+            } = &grouped_node.node_data
+            {
                 // Compute power for this craft node at its current rate
                 let base_rate = self.nodes_base_rate.get(i).cloned().unwrap_or_default();
                 let rate_value = (base_rate * self.current_rate).value();
-                
+
                 if rate_value > 0.0 {
                     let num_machines = rate_value.ceil().max(1.0);
                     let num_full_machines = rate_value.floor().max(0.0);
-                    
+
                     let boost = 1.0 + num_somersloop.value() * somersloop_mult.value();
                     let boost_pow = boost.powf(*somersloop_power_exponent);
-                    
-                    let same_clock = num_machines * recipe_power * boost_pow * (rate_value / num_machines).powf(*power_exponent);
+
+                    let same_clock = num_machines
+                        * recipe_power
+                        * boost_pow
+                        * (rate_value / num_machines).powf(*power_exponent);
                     let mut last_underclock = num_full_machines * recipe_power * boost_pow;
                     let fractional = rate_value - num_full_machines;
                     if fractional > 0.0 {
-                        last_underclock += recipe_power * boost_pow * fractional.powf(*power_exponent);
+                        last_underclock +=
+                            recipe_power * boost_pow * fractional.powf(*power_exponent);
                     }
-                    
-                    self.same_clock_power += FractionalNumber::new((same_clock * 1000.0).round() as i64, 1000);
-                    self.last_underclock_power += FractionalNumber::new((last_underclock * 1000.0).round() as i64, 1000);
+
+                    self.same_clock_power +=
+                        FractionalNumber::new((same_clock * 1000.0).round() as i64, 1000);
+                    self.last_underclock_power +=
+                        FractionalNumber::new((last_underclock * 1000.0).round() as i64, 1000);
                     self.variable_power |= *variable_power;
                 }
             }
@@ -731,13 +782,23 @@ impl GroupNode {
 
         for (i, grouped_node) in self.grouped_nodes.iter().enumerate() {
             match &grouped_node.node_data {
-                GroupedNodeData::Craft { building_name, built, .. } => {
+                GroupedNodeData::Craft {
+                    building_name,
+                    built,
+                    ..
+                } => {
                     let base_rate = self.nodes_base_rate.get(i).cloned().unwrap_or_default();
                     let current = base_rate * self.current_rate;
-                    
-                    *self.total_machines.entry(building_name.clone()).or_default() += current;
+
+                    *self
+                        .total_machines
+                        .entry(building_name.clone())
+                        .or_default() += current;
                     if *built {
-                        *self.built_machines.entry(building_name.clone()).or_default() += current;
+                        *self
+                            .built_machines
+                            .entry(building_name.clone())
+                            .or_default() += current;
                     }
                 }
                 GroupedNodeData::Group { .. } => {
@@ -751,12 +812,19 @@ impl GroupNode {
     /// Set built state on all contained craft nodes
     pub fn set_built_state(&mut self, built: bool) {
         for grouped_node in &mut self.grouped_nodes {
-            if let GroupedNodeData::Craft { built: node_built, .. } = &mut grouped_node.node_data {
+            if let GroupedNodeData::Craft {
+                built: node_built, ..
+            } = &mut grouped_node.node_data
+            {
                 *node_built = built;
             } else if let GroupedNodeData::Group { nodes, .. } = &mut grouped_node.node_data {
                 // Recursively set built state on nested groups
                 for nested in nodes {
-                    if let GroupedNodeData::Craft { built: nested_built, .. } = &mut nested.node_data {
+                    if let GroupedNodeData::Craft {
+                        built: nested_built,
+                        ..
+                    } = &mut nested.node_data
+                    {
                         *nested_built = built;
                     }
                 }
@@ -793,10 +861,12 @@ impl GroupNode {
     pub fn count_craft_nodes(&self) -> (usize, usize) {
         let mut built = 0usize;
         let mut total = 0usize;
-        
+
         for grouped_node in &self.grouped_nodes {
             match &grouped_node.node_data {
-                GroupedNodeData::Craft { built: is_built, .. } => {
+                GroupedNodeData::Craft {
+                    built: is_built, ..
+                } => {
                     total += 1;
                     if *is_built {
                         built += 1;
@@ -804,7 +874,10 @@ impl GroupNode {
                 }
                 GroupedNodeData::Group { nodes, .. } => {
                     for nested in nodes {
-                        if let GroupedNodeData::Craft { built: is_built, .. } = &nested.node_data {
+                        if let GroupedNodeData::Craft {
+                            built: is_built, ..
+                        } = &nested.node_data
+                        {
                             total += 1;
                             if *is_built {
                                 built += 1;
@@ -815,7 +888,7 @@ impl GroupNode {
                 _ => {}
             }
         }
-        
+
         (built, total)
     }
 }

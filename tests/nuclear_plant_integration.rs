@@ -204,7 +204,11 @@ fn test_nuclear_plant_load_and_file_consistency() {
                     .find_node_by_index(idx)
                     .expect(&format!("Power craft node {} missing", idx));
                 // Node should be marked as power generator
-                assert!(app.get_node_is_power_generator(nid), "Node {} should be a power generator", idx);
+                assert!(
+                    app.get_node_is_power_generator(nid),
+                    "Node {} should be a power generator",
+                    idx
+                );
                 if let Some((same_str, last_str, _variable)) = app.get_node_power_info(nid) {
                     // Parse as FractionalNumber and ensure non-zero (and likely negative)
                     let same = match ficsit_companion_rs::FractionalNumber::from_string(&same_str) {
@@ -215,9 +219,17 @@ fn test_nuclear_plant_load_and_file_consistency() {
                         Ok(v) => v,
                         Err(e) => panic!("Failed parsing last power '{}': {}", last_str, e),
                     };
-                    assert!(same.value() != 0.0 || last.value() != 0.0, "Power generator node {} reports zero power", idx);
+                    assert!(
+                        same.value() != 0.0 || last.value() != 0.0,
+                        "Power generator node {} reports zero power",
+                        idx
+                    );
                     // At least one should be negative (generation)
-                    assert!(same.value() < 0.0 || last.value() < 0.0, "Power generator node {} should have negative power", idx);
+                    assert!(
+                        same.value() < 0.0 || last.value() < 0.0,
+                        "Power generator node {} should have negative power",
+                        idx
+                    );
                     found_power_gen = true;
                 } else {
                     panic!("No power info for node {}", idx);

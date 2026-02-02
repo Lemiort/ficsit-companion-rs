@@ -17,7 +17,7 @@ impl Item {
         Self {
             name,
             new_line_name,
-            icon_path: icon_path.to_string(),
+            icon_path: icon_path.to_owned(),
             icon_texture_id: None,
             sink_value,
         }

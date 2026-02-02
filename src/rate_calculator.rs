@@ -82,7 +82,7 @@ impl LinearSolver {
         let mut matrix = Vec::new();
         for i in 0..num_equations {
             let mut row = coefficients[i].clone();
-            row.push(constants[i].clone());
+            row.push(constants[i]);
             matrix.push(row);
         }
 
@@ -127,12 +127,11 @@ impl LinearSolver {
 
             // Eliminate below pivot
             for i in (h + 1)..num_equations {
-                let factor = self.matrix[i][k].clone() / self.matrix[h][k].clone();
+                let factor = self.matrix[i][k] / self.matrix[h][k];
                 self.matrix[i][k] = FractionalNumber::new(0, 1);
 
                 for j in (k + 1)..=num_variables {
-                    self.matrix[i][j] =
-                        self.matrix[i][j].clone() - self.matrix[h][j].clone() * factor.clone();
+                    self.matrix[i][j] = self.matrix[i][j] - self.matrix[h][j] * factor;
                 }
             }
 
@@ -170,11 +169,10 @@ impl LinearSolver {
 
             let mut sum = FractionalNumber::new(0, 1);
             for j in (pivot_col + 1)..num_variables {
-                sum = sum + self.matrix[i][j].clone() * solution[j].clone();
+                sum += self.matrix[i][j] * solution[j];
             }
 
-            solution[pivot_col] =
-                (self.matrix[i][num_variables].clone() - sum) / self.matrix[i][pivot_col].clone();
+            solution[pivot_col] = (self.matrix[i][num_variables] - sum) / self.matrix[i][pivot_col];
         }
 
         // Verify all solutions are non-negative
@@ -249,8 +247,8 @@ pub fn build_equations(
             if let Some((var_idx2, ratio2)) = mapping.pin_to_variable.get(&input_pin) {
                 // equation: output_rate - input_rate = 0
                 let mut equation = vec![FractionalNumber::new(0, 1); mapping.num_variables];
-                equation[*var_idx] = ratio.clone();
-                equation[*var_idx2] = FractionalNumber::new(-1, 1) * ratio2.clone();
+                equation[*var_idx] = *ratio;
+                equation[*var_idx2] = FractionalNumber::new(-1, 1) * *ratio2;
                 equations_coefficients.push(equation);
                 constants.push(FractionalNumber::new(0, 1));
             }
@@ -261,9 +259,9 @@ pub fn build_equations(
     for (pin_id, rate) in &locked_pin_rates {
         if let Some((var_idx, ratio)) = mapping.pin_to_variable.get(pin_id) {
             let mut equation = vec![FractionalNumber::new(0, 1); mapping.num_variables];
-            equation[*var_idx] = ratio.clone();
+            equation[*var_idx] = *ratio;
             equations_coefficients.push(equation);
-            constants.push(rate.clone());
+            constants.push(*rate);
         }
     }
 
@@ -365,7 +363,7 @@ mod tests {
             Err(RateError::Contradiction) => {
                 // Expected
             }
-            Err(_) => panic!("Wrong error type"),
+            Err(e) => panic!("Wrong error type: {e}"),
         }
     }
 

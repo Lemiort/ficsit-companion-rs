@@ -32,34 +32,38 @@ impl<'de> Deserialize<'de> for SerializedNode {
     {
         // First deserialize as a generic JSON value to inspect the kind field
         let value = serde_json::Value::deserialize(deserializer)?;
-        
-        let kind = value.get("kind")
+
+        let kind = value
+            .get("kind")
             .and_then(|k| k.as_u64())
             .ok_or_else(|| serde::de::Error::custom("missing 'kind' field"))?;
-        
+
         match kind {
             0 => {
-                let craft: SerializedCraftNode = serde_json::from_value(value)
-                    .map_err(serde::de::Error::custom)?;
+                let craft: SerializedCraftNode =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
                 Ok(SerializedNode::Craft(craft))
             }
             1 | 2 | 4 => {
                 // CustomSplitter, Merger, GameSplitter
-                let org: SerializedOrganizerNode = serde_json::from_value(value)
-                    .map_err(serde::de::Error::custom)?;
+                let org: SerializedOrganizerNode =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
                 Ok(SerializedNode::Organizer(org))
             }
             3 => {
-                let group: SerializedGroupNode = serde_json::from_value(value)
-                    .map_err(serde::de::Error::custom)?;
+                let group: SerializedGroupNode =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
                 Ok(SerializedNode::Group(group))
             }
             5 => {
-                let sink: SerializedSinkNode = serde_json::from_value(value)
-                    .map_err(serde::de::Error::custom)?;
+                let sink: SerializedSinkNode =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
                 Ok(SerializedNode::Sink(sink))
             }
-            _ => Err(serde::de::Error::custom(format!("unknown node kind: {}", kind))),
+            _ => Err(serde::de::Error::custom(format!(
+                "unknown node kind: {}",
+                kind
+            ))),
         }
     }
 }

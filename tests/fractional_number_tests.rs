@@ -29,7 +29,8 @@ fn test_negative_number_parsing() {
     assert!((n6.value() + 5.0).abs() < 1e-9);
 
     // Complex expression with decimals and fractions
-    let n7 = FractionalNumber::from_string("(7.2 - 4.8) + 2 / (4/3 - 1/3)").expect("failed to parse (7.2 - 4.8) + 2 / (4/3 - 1/3)");
+    let n7 = FractionalNumber::from_string("(7.2 - 4.8) + 2 / (4/3 - 1/3)")
+        .expect("failed to parse (7.2 - 4.8) + 2 / (4/3 - 1/3)");
     // Expected value: (7.2 - 4.8) = 2.4; (4/3 - 1/3) = 1, so 2/1 = 2; total = 4.4 = 22/5
     assert!((n7.value() - 4.4).abs() < 1e-9);
     assert_eq!(n7.numerator(), 22);
