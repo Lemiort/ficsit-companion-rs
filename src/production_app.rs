@@ -2819,6 +2819,16 @@ impl ProductionApp {
         // Also save craft node rates so we can re-apply them after propagation (preserve visuals)
         let mut craft_saved_rates: Vec<(usize, crate::fractional_number::FractionalNumber)> =
             Vec::new();
+        // Also save group node rates so we can re-apply them after propagation (preserve visuals)
+        let mut group_saved_rates: Vec<(usize, crate::fractional_number::FractionalNumber)> =
+            Vec::new();
+        // Also save sink node pin rates so we can re-apply them after propagation (preserve visuals)
+        let mut sink_saved_pins: Vec<(
+            usize,
+            usize,
+            crate::fractional_number::FractionalNumber,
+            bool,
+        )> = Vec::new();
         for (idx, serialized_node) in file.nodes.iter().enumerate() {
             if let SerializedNode::Organizer(org) = serialized_node {
                 if let Some(ins) = &org.ins {
@@ -2845,6 +2855,17 @@ impl ProductionApp {
                 }
             } else if let SerializedNode::Craft(c) = serialized_node {
                 craft_saved_rates.push((idx, FractionalNumber::new(c.rate.num, c.rate.den)));
+            } else if let SerializedNode::Group(g) = serialized_node {
+                group_saved_rates.push((idx, FractionalNumber::new(g.rate.num, g.rate.den)));
+            } else if let SerializedNode::Sink(s) = serialized_node {
+                for (i, input) in s.ins.iter().enumerate() {
+                    sink_saved_pins.push((
+                        idx,
+                        i,
+                        FractionalNumber::new(input.num, input.den),
+                        input.locked,
+                    ));
+                }
             }
             self.load_node(serialized_node, idx, game_data)?;
         }
@@ -2986,6 +3007,47 @@ impl ProductionApp {
             }
             if let Some(n_any) = self.nodes[file_idx].downcast_mut::<CraftNode>() {
                 n_any.update_rate(saved_rate);
+            }
+        }
+
+        // Re-apply saved group node rates to preserve visual node rates from file (best-effort)
+        for (file_idx, saved_rate) in group_saved_rates {
+            if file_idx >= self.nodes.len() {
+                continue;
+            }
+            if let Some(n_any) = self.nodes[file_idx].downcast_mut::<GroupNode>() {
+                // Update the group's current_rate and recalculate internal node rates
+                n_any.current_rate = saved_rate;
+                // Recalculate internal node current_rates from base_rate * group rate
+                for (i, grouped_node) in n_any.grouped_nodes.iter_mut().enumerate() {
+                    if let crate::node::GroupedNodeData::Craft { current_rate, .. } = &mut grouped_node.node_data {
+                        let base = n_any.nodes_base_rate.get(i).cloned().unwrap_or_default();
+                        *current_rate = base * saved_rate;
+                    }
+                }
+                // Recalculate pin current_rates from base_rate * group rate
+                for pin in n_any.base.ins.iter_mut() {
+                    pin.current_rate = pin.base_rate * saved_rate;
+                }
+                for pin in n_any.base.outs.iter_mut() {
+                    pin.current_rate = pin.base_rate * saved_rate;
+                }
+                // Recalculate power and details
+                n_any.compute_power_usage();
+                n_any.update_details();
+            }
+        }
+
+        // Re-apply saved sink pin rates to preserve visual pin rates from file (best-effort)
+        for (file_idx, pin_idx, saved_rate, saved_locked) in sink_saved_pins {
+            if file_idx >= self.nodes.len() {
+                continue;
+            }
+            if let Some(n_any) = self.nodes[file_idx].downcast_mut::<SinkNode>() {
+                if pin_idx < n_any.base.ins.len() {
+                    n_any.base.ins[pin_idx].current_rate = saved_rate;
+                    n_any.base.ins[pin_idx].locked = saved_locked;
+                }
             }
         }
 

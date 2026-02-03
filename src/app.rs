@@ -3306,20 +3306,15 @@ impl TemplateApp {
                     }
                     self.separator_text_left(ui, "Machines");
 
-                    // Compute total machines and per-building & per-recipe breakdown
-                    let mut total_machines = FractionalNumber::default();
-                    let mut detailed_machines: std::collections::HashMap<String, FractionalNumber> = std::collections::HashMap::new();
+                    // Compute per-building & per-recipe breakdown
+                    // We collect recipe_breakdown first, then derive detailed_machines from it
+                    // to ensure building totals always equal the sum of recipe totals
                     let mut recipe_breakdown: std::collections::HashMap<String, std::collections::HashMap<String, FractionalNumber>> = std::collections::HashMap::new();
 
                     for node_any in &self.production_app.nodes {
                         if let Some(craft) = node_any.downcast_ref::<crate::node::CraftNode>() {
                             let bname = craft.building_name.clone();
                             let rate = craft.current_rate;
-                            total_machines += rate.clone();
-                            detailed_machines
-                                .entry(bname.clone())
-                                .and_modify(|v| *v += rate.clone())
-                                .or_insert(rate.clone());
                             recipe_breakdown
                                 .entry(bname.clone())
                                 .or_insert_with(std::collections::HashMap::new)
@@ -3327,16 +3322,30 @@ impl TemplateApp {
                                 .and_modify(|v| *v += rate.clone())
                                 .or_insert(rate.clone());
                         } else if let Some(group) = node_any.downcast_ref::<crate::node::GroupNode>() {
-                            // Include machines from the group's contained nodes
-                            for (bname, rate) in &group.total_machines {
-                                total_machines += *rate;
-                                detailed_machines
-                                    .entry(bname.clone())
-                                    .and_modify(|v| *v += *rate)
-                                    .or_insert(*rate);
-                            }
                             // Add recipe breakdown from grouped_nodes
                             Self::add_grouped_recipe_breakdown(&group.grouped_nodes, &mut recipe_breakdown);
+                        }
+                    }
+
+                    // Compute detailed_machines and total_machines from recipe_breakdown
+                    // This ensures building totals equal sum of recipe totals
+                    let mut total_machines = FractionalNumber::default();
+                    let mut detailed_machines: std::collections::HashMap<String, FractionalNumber> = std::collections::HashMap::new();
+                    for (bname, recipes) in &recipe_breakdown {
+                        for (_rname, rate) in recipes {
+                            total_machines += rate.clone();
+                            detailed_machines
+                                .entry(bname.clone())
+                                .and_modify(|v| *v += rate.clone())
+                                .or_insert(rate.clone());
+                        }
+                    }
+
+                    // Compute min_machines by taking ceil per recipe (matching C++ behavior)
+                    let mut min_machines: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+                    for (bname, recipes) in &recipe_breakdown {
+                        for (_rname, rate) in recipes {
+                            *min_machines.entry(bname.clone()).or_insert(0) += rate.value().ceil() as i64;
                         }
                     }
 
@@ -3368,8 +3377,8 @@ impl TemplateApp {
                                             let mut s = count.to_float_string();
                                             let txt = egui::TextEdit::singleline(&mut s).desired_width(machines_width);
                                             ui.add_enabled(false, txt);
-                                            // show rate rounded up (ceiling) for this building type
-                                            let ceil_count = count.value().ceil() as i64;
+                                            // show min machines (sum of ceil per node) for this building type
+                                            let ceil_count = min_machines.get(bname).copied().unwrap_or(0);
                                             ui.label(format!(" ({})", ceil_count));
                                         })
                                         .response
@@ -3398,7 +3407,7 @@ impl TemplateApp {
                                                     let mut s = rcnt.to_float_string();
                                                     let txt = egui::TextEdit::singleline(&mut s).desired_width(machines_width);
                                                     ui.add_enabled(false, txt);
-                                                    // show rate rounded up (ceiling) for this recipe
+                                                    // show ceil per recipe (matching C++ behavior)
                                                     let ceil_count = rcnt.value().ceil() as i64;
                                                     ui.label(format!(" ({})", ceil_count));
                                                 })
