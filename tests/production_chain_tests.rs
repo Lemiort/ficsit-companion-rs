@@ -959,3 +959,79 @@ fn test_connect_merger_output_to_new_craft_input() {
         c_in0_rate
     );
 }
+
+/// Test that splitter outputs are independent of each other.
+/// When one output is edited, other outputs should stay constant, and input adjusts.
+#[test]
+fn test_splitter_outputs_independent_input_adjusts() {
+    let _game_data = load_game_data();
+    let mut app = ProductionApp::new();
+
+    // Create a splitter (now has 3 outputs)
+    let splitter_id = app.add_custom_splitter_node();
+
+    // Set splitter input to 60
+    app.set_pin_rate(splitter_id, PinDirection::Input, 0, FractionalNumber::new(60, 1))
+        .expect("Failed to set splitter input rate");
+
+    // Check splitter state: input = 60, outputs = [20, 20, 20] (equal distribution for 3 outputs)
+    let (s_ins, s_outs) = app.get_node_pin_rates(splitter_id).unwrap();
+    println!("Splitter initial: ins={:?}, outs={:?}", s_ins, s_outs);
+    
+    // Input should be 60
+    let in_rate = s_ins[0].as_ref().unwrap();
+    assert!(
+        in_rate == "60" || in_rate == "60/1",
+        "Input should be 60, got: {}",
+        in_rate
+    );
+    
+    // All outputs should be 20 (60 / 3)
+    for (i, out) in s_outs.iter().enumerate() {
+        let out_rate = out.as_ref().unwrap();
+        assert!(
+            out_rate == "20" || out_rate == "20/1",
+            "Output {} should be 20, got: {}",
+            i, out_rate
+        );
+    }
+
+    // Now set output 1 to 30 - this should adjust the input (output 0 and 2 stay at 20)
+    app.set_pin_rate(splitter_id, PinDirection::Output, 1, FractionalNumber::new(30, 1))
+        .expect("Failed to set splitter output 1");
+
+    let (s_ins_after, s_outs_after) = app.get_node_pin_rates(splitter_id).unwrap();
+    println!("Splitter after setting out1=30: ins={:?}, outs={:?}", s_ins_after, s_outs_after);
+
+    // Output 1 should be 30
+    let out1_rate = s_outs_after[1].as_ref().unwrap();
+    assert!(
+        out1_rate == "30" || out1_rate == "30/1",
+        "Output 1 should be 30, got: {}",
+        out1_rate
+    );
+
+    // Output 0 should STILL be 20 (independent)
+    let out0_after = s_outs_after[0].as_ref().unwrap();
+    assert!(
+        out0_after == "20" || out0_after == "20/1",
+        "Output 0 should remain 20 (independent), got: {}",
+        out0_after
+    );
+
+    // Output 2 should STILL be 20 (independent)
+    let out2_after = s_outs_after[2].as_ref().unwrap();
+    assert!(
+        out2_after == "20" || out2_after == "20/1",
+        "Output 2 should remain 20 (independent), got: {}",
+        out2_after
+    );
+
+    // Input should be sum of outputs: 20 + 30 + 20 = 70
+    let in_after = s_ins_after[0].as_ref().unwrap();
+    assert!(
+        in_after == "70" || in_after == "70/1",
+        "Input should be 70 (sum of outputs), got: {}",
+        in_after
+    );
+}
