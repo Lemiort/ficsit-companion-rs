@@ -1570,6 +1570,10 @@ impl ProductionApp {
         let pin_id = self.get_next_id();
         if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
             let locked = n.base.ins.get(0).map(|p| p.locked).unwrap_or(false);
+            let is_game_splitter = n.base.kind == NodeKind::GameSplitter;
+            let input_pin_id = n.base.ins.get(0).map(|p| p.id);
+            let input_rate = n.base.ins.get(0).map(|p| p.current_rate).unwrap_or_default();
+            
             n.base.outs.push(Pin::new(
                 pin_id,
                 PinDirection::Output,
@@ -1578,6 +1582,21 @@ impl ProductionApp {
                 locked,
                 FractionalNumber::default(),
             ));
+            
+            // For GameSplitter, update all output pins' base_rate to 1/N
+            if is_game_splitter {
+                let num_outs = n.base.outs.len();
+                let new_ratio = FractionalNumber::new(1, num_outs as i64);
+                for out_pin in &mut n.base.outs {
+                    out_pin.base_rate = new_ratio;
+                }
+                
+                if let Some(in_pin_id) = input_pin_id {
+                    // Ignore errors - if propagation fails, the pin is still added
+                    let _ = self.update_nodes_rate(in_pin_id, input_rate);
+                }
+            }
+            
             Ok(())
         } else {
             Err("Unsupported node kind for add output".into())
@@ -1689,24 +1708,70 @@ impl ProductionApp {
         let ni = self
             .find_node_index(node_id)
             .ok_or_else(|| format!("Node {} not found", node_id))?;
-        // Read pin id immutably first
-        if let Some(n) = self.nodes[ni].downcast_ref::<OrganizerNode>() {
-            if idx >= n.base.outs.len() {
-                return Err("Output index out of range".into());
+        // Read pin id and node info immutably first
+        let (pin_id, is_game_splitter, is_custom_splitter, input_pin_id, input_rate, input_locked) = {
+            if let Some(n) = self.nodes[ni].downcast_ref::<OrganizerNode>() {
+                if idx >= n.base.outs.len() {
+                    return Err("Output index out of range".into());
+                }
+                (
+                    n.base.outs[idx].id,
+                    n.base.kind == NodeKind::GameSplitter,
+                    n.base.kind == NodeKind::CustomSplitter,
+                    n.base.ins.get(0).map(|p| p.id),
+                    n.base.ins.get(0).map(|p| p.current_rate).unwrap_or_default(),
+                    n.base.ins.get(0).map(|p| p.locked).unwrap_or(false),
+                )
+            } else {
+                return Err("Unsupported node kind for remove output".into());
             }
-            let pin_id = n.base.outs[idx].id;
-            if let Some(link) = self.find_link_by_pin(pin_id) {
-                let lid = link.id;
-                self.delete_link(lid)?;
-            }
-            if let Some(nm) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
-                nm.base.outs.remove(idx);
-                return Ok(());
-            }
-            unreachable!();
-        } else {
-            Err("Unsupported node kind for remove output".into())
+        };
+        
+        // Delete link if exists
+        if let Some(link) = self.find_link_by_pin(pin_id) {
+            let lid = link.id;
+            self.delete_link(lid)?;
         }
+        
+        // Remove the pin
+        if let Some(nm) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+            nm.base.outs.remove(idx);
+            
+            // For GameSplitter, update remaining outputs' base_rate to 1/N
+            if is_game_splitter && !nm.base.outs.is_empty() {
+                let num_outs = nm.base.outs.len();
+                let new_ratio = FractionalNumber::new(1, num_outs as i64);
+                for out_pin in &mut nm.base.outs {
+                    out_pin.base_rate = new_ratio;
+                }
+            }
+        }
+        
+        // Recalculate rates after removal
+        if is_game_splitter {
+            // GameSplitter: recalculate with input rate to redistribute evenly
+            if let Some(in_pin_id) = input_pin_id {
+                let _ = self.update_nodes_rate(in_pin_id, input_rate);
+            }
+        } else if is_custom_splitter {
+            // CustomSplitter: compute new input as sum of remaining outputs (unless input is locked)
+            let new_input = if input_locked {
+                input_rate
+            } else {
+                // Sum remaining output rates
+                let ni = self.find_node_index(node_id).unwrap();
+                if let Some(n) = self.nodes[ni].downcast_ref::<OrganizerNode>() {
+                    n.base.outs.iter().map(|p| p.current_rate).fold(FractionalNumber::default(), |a, b| a + b)
+                } else {
+                    input_rate
+                }
+            };
+            if let Some(in_pin_id) = input_pin_id {
+                let _ = self.update_nodes_rate(in_pin_id, new_input);
+            }
+        }
+        
+        Ok(())
     }
 
     /// Set pin locked state by locking/unlocking the entire connected component.
@@ -2172,72 +2237,80 @@ impl ProductionApp {
                             }
                         }
                     } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
-                        // Track if this is a multi-pin-side pin that came from external
-                        let is_multi_side = match n.base.kind {
-                            NodeKind::CustomSplitter => dir == PinDirection::Output,
-                            NodeKind::Merger => dir == PinDirection::Input,
-                            NodeKind::GameSplitter => false, // GameSplitter doesn't have multi-side
-                            _ => false,
-                        };
-                        
-                        if is_multi_side && came_from_external {
-                            multi_pin_constrained.insert(pid);
-                        }
-                        
-                        let is_single_side = match n.base.kind {
-                            NodeKind::Merger => dir == PinDirection::Output,
-                            NodeKind::CustomSplitter => dir == PinDirection::Input,
-                            _ => false,
-                        };
-                        
-                        // KEY LOGIC for organizer propagation:
-                        // - When at multi-side: add single-side pin(s) 
-                        // - When at single-side reached FROM multi-side: DON'T add other multi-side pins
-                        //   (they stay as constants in the sum equation)
-                        // - When at single-side NOT reached from multi-side (i.e., starting from single-side
-                        //   or reached via link): ADD multi-side pins (they become variables)
-                        
-                        if is_multi_side {
-                            // We're at multi-side - add single-side pin(s), mark as came_from_multi_side
-                            match dir {
-                                PinDirection::Input => {
-                                    for p in n.base.outs.iter() {
-                                        if !visited.contains(&p.id) {
-                                            queue.push_back((p.id, false, true, true)); // came_from_multi_side = true
+                        // GameSplitter: all pins are linked via the node rate (like CraftNode)
+                        if n.base.kind == NodeKind::GameSplitter {
+                            for p in n.base.ins.iter().chain(n.base.outs.iter()) {
+                                if !visited.contains(&p.id) {
+                                    queue.push_back((p.id, false, true, false));
+                                }
+                            }
+                        } else {
+                            // Merger/CustomSplitter: track if this is a multi-pin-side pin that came from external
+                            let is_multi_side = match n.base.kind {
+                                NodeKind::CustomSplitter => dir == PinDirection::Output,
+                                NodeKind::Merger => dir == PinDirection::Input,
+                                _ => false,
+                            };
+                            
+                            if is_multi_side && came_from_external {
+                                multi_pin_constrained.insert(pid);
+                            }
+                            
+                            let is_single_side = match n.base.kind {
+                                NodeKind::Merger => dir == PinDirection::Output,
+                                NodeKind::CustomSplitter => dir == PinDirection::Input,
+                                _ => false,
+                            };
+                            
+                            // KEY LOGIC for organizer propagation:
+                            // - When at multi-side: add single-side pin(s) 
+                            // - When at single-side reached FROM multi-side: DON'T add other multi-side pins
+                            //   (they stay as constants in the sum equation)
+                            // - When at single-side NOT reached from multi-side (i.e., starting from single-side
+                            //   or reached via link): ADD multi-side pins (they become variables)
+                            
+                            if is_multi_side {
+                                // We're at multi-side - add single-side pin(s), mark as came_from_multi_side
+                                match dir {
+                                    PinDirection::Input => {
+                                        for p in n.base.outs.iter() {
+                                            if !visited.contains(&p.id) {
+                                                queue.push_back((p.id, false, true, true)); // came_from_multi_side = true
+                                            }
+                                        }
+                                    }
+                                    PinDirection::Output => {
+                                        for p in n.base.ins.iter() {
+                                            if !visited.contains(&p.id) {
+                                                queue.push_back((p.id, false, true, true)); // came_from_multi_side = true
+                                            }
                                         }
                                     }
                                 }
-                                PinDirection::Output => {
-                                    for p in n.base.ins.iter() {
-                                        if !visited.contains(&p.id) {
-                                            queue.push_back((p.id, false, true, true)); // came_from_multi_side = true
+                            } else if is_single_side && !came_from_multi_side {
+                                // We're at single-side and didn't come from multi-side
+                                // (i.e., this is the constraint pin or came via external link)
+                                // Add multi-side pins to distribute the value
+                                match dir {
+                                    PinDirection::Input => {
+                                        for p in n.base.outs.iter() {
+                                            if !visited.contains(&p.id) {
+                                                queue.push_back((p.id, false, true, false));
+                                            }
+                                        }
+                                    }
+                                    PinDirection::Output => {
+                                        for p in n.base.ins.iter() {
+                                            if !visited.contains(&p.id) {
+                                                queue.push_back((p.id, false, true, false));
+                                            }
                                         }
                                     }
                                 }
                             }
-                        } else if is_single_side && !came_from_multi_side {
-                            // We're at single-side and didn't come from multi-side
-                            // (i.e., this is the constraint pin or came via external link)
-                            // Add multi-side pins to distribute the value
-                            match dir {
-                                PinDirection::Input => {
-                                    for p in n.base.outs.iter() {
-                                        if !visited.contains(&p.id) {
-                                            queue.push_back((p.id, false, true, false));
-                                        }
-                                    }
-                                }
-                                PinDirection::Output => {
-                                    for p in n.base.ins.iter() {
-                                        if !visited.contains(&p.id) {
-                                            queue.push_back((p.id, false, true, false));
-                                        }
-                                    }
-                                }
-                            }
+                            // If at single-side AND came_from_multi_side, don't add multi-side pins
+                            // They stay as constants
                         }
-                        // If at single-side AND came_from_multi_side, don't add multi-side pins
-                        // They stay as constants
                     } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
                         // Group: all pins are linked via the group rate
                         for p in n.base.ins.iter().chain(n.base.outs.iter()) {
@@ -2352,64 +2425,74 @@ impl ProductionApp {
                     //   - If single-side is also unconstrained, multi-side is a constant (rate 0)
                     // - Unconnected single-side pins should be variables computed from the sum
                     // For Sink: all pins are inputs and unconnected ones are constants.
+                    // For GameSplitter: skip this logic entirely - it uses node-level variable like CraftNode.
                     if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
-                        let has_link = self
-                            .links
-                            .iter()
-                            .any(|l| l.start_pin_id == *pid || l.end_pin_id == *pid);
-                        let is_constraint_pin = *pid == constraint_pin_id;
+                        // Skip multi-side/single-side logic for GameSplitter
+                        if n.base.kind == NodeKind::GameSplitter {
+                            log::debug!(
+                                "[SOLVER] pin {} belongs to GameSplitter node {}, skipping multi-side logic",
+                                *pid,
+                                node_id
+                            );
+                            // GameSplitter pins are handled below with node-level variable
+                        } else {
+                            let has_link = self
+                                .links
+                                .iter()
+                                .any(|l| l.start_pin_id == *pid || l.end_pin_id == *pid);
+                            let is_constraint_pin = *pid == constraint_pin_id;
 
-                        if !has_link && !is_constraint_pin {
-                            // Determine if this is the "single" side
-                            let is_single_side = match n.base.kind {
-                                NodeKind::Merger => direction == PinDirection::Output,
-                                NodeKind::CustomSplitter => direction == PinDirection::Input,
-                                _ => false, // GameSplitter uses node-level variable
-                            };
-
-                            if is_single_side {
-                                // Single side is unconnected - keep as variable to be computed from sum
-                                // But only if there's at least one multi-side pin that provides a constraint
-                                let multi_side_pins: Vec<&crate::pin::Pin> = match n.base.kind {
-                                    NodeKind::Merger => n.base.ins.iter().collect(),
-                                    NodeKind::CustomSplitter => n.base.outs.iter().collect(),
-                                    _ => vec![],
+                            if !has_link && !is_constraint_pin {
+                                // Determine if this is the "single" side
+                                let is_single_side = match n.base.kind {
+                                    NodeKind::Merger => direction == PinDirection::Output,
+                                    NodeKind::CustomSplitter => direction == PinDirection::Input,
+                                    _ => false,
                                 };
-                                
-                                let any_multi_constrained = multi_side_pins.iter().any(|p| {
-                                    let pin_has_link = self.links.iter().any(|l| l.start_pin_id == p.id || l.end_pin_id == p.id);
-                                    let is_constraint = p.id == constraint_pin_id;
-                                    pin_has_link || p.locked || is_constraint
-                                });
-                                
-                                if !any_multi_constrained {
-                                    // No multi-side pins are constrained, so single-side is also constant
-                                    locked_rates.insert(*pid, current_rate);
+
+                                if is_single_side {
+                                    // Single side is unconnected - keep as variable to be computed from sum
+                                    // But only if there's at least one multi-side pin that provides a constraint
+                                    let multi_side_pins: Vec<&crate::pin::Pin> = match n.base.kind {
+                                        NodeKind::Merger => n.base.ins.iter().collect(),
+                                        NodeKind::CustomSplitter => n.base.outs.iter().collect(),
+                                        _ => vec![],
+                                    };
+                                    
+                                    let any_multi_constrained = multi_side_pins.iter().any(|p| {
+                                        let pin_has_link = self.links.iter().any(|l| l.start_pin_id == p.id || l.end_pin_id == p.id);
+                                        let is_constraint = p.id == constraint_pin_id;
+                                        pin_has_link || p.locked || is_constraint
+                                    });
+                                    
+                                    if !any_multi_constrained {
+                                        // No multi-side pins are constrained, so single-side is also constant
+                                        locked_rates.insert(*pid, current_rate);
+                                        log::debug!(
+                                            "[SOLVER] pin {} is unconnected single-side organizer with no multi-side constraints, treating as constant with rate {}",
+                                            *pid,
+                                            current_rate.to_fraction_string()
+                                        );
+                                        continue;
+                                    }
+                                    // Keep as variable - will be computed from sum equation
                                     log::debug!(
-                                        "[SOLVER] pin {} is unconnected single-side organizer with no multi-side constraints, treating as constant with rate {}",
-                                        *pid,
-                                        current_rate.to_fraction_string()
+                                        "[SOLVER] pin {} is unconnected single-side organizer, keeping as variable to compute from sum",
+                                        *pid
                                     );
-                                    continue;
-                                }
-                                // Keep as variable - will be computed from sum equation
-                                log::debug!(
-                                    "[SOLVER] pin {} is unconnected single-side organizer, keeping as variable to compute from sum",
-                                    *pid
-                                );
-                            } else {
-                                // Multi-side is unconnected - check if single-side is constrained
-                                let single_side_pins: Vec<&crate::pin::Pin> = match n.base.kind {
-                                    NodeKind::Merger => n.base.outs.iter().collect(),
-                                    NodeKind::CustomSplitter => n.base.ins.iter().collect(),
-                                    _ => vec![],
-                                };
-                                
-                                let single_side_constrained = single_side_pins.iter().any(|p| {
-                                    let pin_has_link = self.links.iter().any(|l| l.start_pin_id == p.id || l.end_pin_id == p.id);
-                                    let is_constraint = p.id == constraint_pin_id;
-                                    pin_has_link || p.locked || is_constraint
-                                });
+                                } else {
+                                    // Multi-side is unconnected - check if single-side is constrained
+                                    let single_side_pins: Vec<&crate::pin::Pin> = match n.base.kind {
+                                        NodeKind::Merger => n.base.outs.iter().collect(),
+                                        NodeKind::CustomSplitter => n.base.ins.iter().collect(),
+                                        _ => vec![],
+                                    };
+                                    
+                                    let single_side_constrained = single_side_pins.iter().any(|p| {
+                                        let pin_has_link = self.links.iter().any(|l| l.start_pin_id == p.id || l.end_pin_id == p.id);
+                                        let is_constraint = p.id == constraint_pin_id;
+                                        pin_has_link || p.locked || is_constraint
+                                    });
                                 
                                 if single_side_constrained {
                                     // Single side is constrained - check if ALL multi-side pins are unconnected/unlocked
@@ -2455,6 +2538,7 @@ impl ProductionApp {
                                 }
                             }
                         }
+                        } // end of else (Merger/CustomSplitter)
                     } else if node_any.downcast_ref::<SinkNode>().is_some() {
                         let has_link = self
                             .links
