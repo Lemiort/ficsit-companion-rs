@@ -604,13 +604,33 @@ fn test_connect_locked_craft_merger_loop() {
         result1.err()
     );
 
+    // Debug after first link
+    let (m_ins1, m_outs1) = app.get_node_pin_rates(merger_id).unwrap();
+    let (m_ins_locked1, m_outs_locked1) = app.get_node_pin_locked_flags(merger_id).unwrap();
+    println!("After first link:");
+    println!("  merger ins: {:?}, locked: {:?}", m_ins1, m_ins_locked1);
+    println!("  merger outs: {:?}, locked: {:?}", m_outs1, m_outs_locked1);
+
     // Second connection: merger output -> craft input (creates a loop)
     let result2 = app.create_link(merger_out_pin, craft_in_pin);
+    if let Err(ref e) = result2 {
+        println!("Second link error: {:?}", e);
+    }
+    if let Ok((_, ref warn)) = result2 {
+        println!("Second link warning: {:?}", warn);
+    }
     assert!(
         result2.is_ok(),
         "Second create_link (loop) should succeed, got error: {:?}",
         result2.err()
     );
+
+    // Debug after second link
+    let (m_ins2, m_outs2) = app.get_node_pin_rates(merger_id).unwrap();
+    let (m_ins_locked2, m_outs_locked2) = app.get_node_pin_locked_flags(merger_id).unwrap();
+    println!("After second link:");
+    println!("  merger ins: {:?}, locked: {:?}", m_ins2, m_ins_locked2);
+    println!("  merger outs: {:?}, locked: {:?}", m_outs2, m_outs_locked2);
 
     // Verify rates after both connections
     let (merger_ins, merger_outs) = app
@@ -661,5 +681,281 @@ fn test_connect_locked_craft_merger_loop() {
         in0_rate_str == "30" || in0_rate_str == "30/1",
         "Merger input 0 should have rate 30 (40 - 10), got: {}",
         in0_rate_str
+    );
+}
+
+/// Test connecting an unlocked craft output to a merger input.
+/// The merger input should receive the craft's output rate.
+#[test]
+fn test_connect_craft_output_to_merger_input() {
+    let game_data = load_game_data();
+    let mut app = ProductionApp::new();
+
+    // Create a craft node with rate=20
+    let craft_id = app
+        .add_craft_node("Iron Ingot", &game_data)
+        .expect("Failed to add craft node");
+
+    // Set craft rate to 20
+    app.set_pin_rate(
+        craft_id,
+        PinDirection::Output,
+        0,
+        FractionalNumber::new(20, 1),
+    )
+    .expect("Failed to set craft rate");
+
+    // Verify craft output is 20
+    let (_c_ins, c_outs) = app.get_node_pin_rates(craft_id).unwrap();
+    let craft_out_rate = c_outs[0].as_ref().unwrap();
+    assert!(
+        craft_out_rate == "20" || craft_out_rate == "20/1",
+        "Craft output should be 20, got: {}",
+        craft_out_rate
+    );
+
+    // Create a merger node
+    let merger_id = app.add_merger_node();
+
+    // Check merger initial state
+    let (m_ins_before, m_outs_before) = app.get_node_pin_rates(merger_id).unwrap();
+    println!(
+        "Merger before link: ins={:?}, outs={:?}",
+        m_ins_before, m_outs_before
+    );
+
+    // Connect craft output -> merger input 0
+    let craft_out_pin = app
+        .get_pin_id(craft_id, PinDirection::Output, 0)
+        .expect("Failed to get craft output pin");
+    let merger_in_pin = app
+        .get_pin_id(merger_id, PinDirection::Input, 0)
+        .expect("Failed to get merger input pin");
+
+    let result = app.create_link(craft_out_pin, merger_in_pin);
+    if let Err(ref e) = result {
+        println!("Link creation error: {:?}", e);
+    }
+    assert!(
+        result.is_ok(),
+        "create_link should succeed, got error: {:?}",
+        result.err()
+    );
+
+    // After connection, the merger input should have rate=20 (from craft)
+    let (m_ins_after, m_outs_after) = app.get_node_pin_rates(merger_id).unwrap();
+    println!(
+        "Merger after link: ins={:?}, outs={:?}",
+        m_ins_after, m_outs_after
+    );
+
+    // Connected input (index 0) should have rate 20
+    let in0_rate = m_ins_after[0].as_ref().expect("Input 0 rate should be Some");
+    assert!(
+        in0_rate == "20" || in0_rate == "20/1",
+        "Merger input 0 should have rate 20 (from craft), got: {}",
+        in0_rate
+    );
+
+    // Merger output should be 20 (sum of inputs: 20 + 0 = 20)
+    let out_rate = m_outs_after[0]
+        .as_ref()
+        .expect("Output rate should be Some");
+    assert!(
+        out_rate == "20" || out_rate == "20/1",
+        "Merger output should be 20, got: {}",
+        out_rate
+    );
+}
+
+/// Test that when all merger inputs are connected and one changes,
+/// other inputs keep their values and the output adjusts.
+#[test]
+fn test_merger_inputs_independent_output_adjusts() {
+    let game_data = load_game_data();
+    let mut app = ProductionApp::new();
+
+    // Create two craft nodes
+    let craft1_id = app
+        .add_craft_node("Iron Ingot", &game_data)
+        .expect("Failed to add craft1");
+    let craft2_id = app
+        .add_craft_node("Iron Ingot", &game_data)
+        .expect("Failed to add craft2");
+
+    // Set craft1 rate to 10, craft2 rate to 30
+    app.set_pin_rate(
+        craft1_id,
+        PinDirection::Output,
+        0,
+        FractionalNumber::new(10, 1),
+    )
+    .expect("Failed to set craft1 rate");
+    app.set_pin_rate(
+        craft2_id,
+        PinDirection::Output,
+        0,
+        FractionalNumber::new(30, 1),
+    )
+    .expect("Failed to set craft2 rate");
+
+    // Create a merger node
+    let merger_id = app.add_merger_node();
+
+    // Connect craft1 output -> merger input 0
+    let c1_out = app
+        .get_pin_id(craft1_id, PinDirection::Output, 0)
+        .unwrap();
+    let m_in0 = app.get_pin_id(merger_id, PinDirection::Input, 0).unwrap();
+    app.create_link(c1_out, m_in0).expect("First link failed");
+
+    // Connect craft2 output -> merger input 1
+    let c2_out = app
+        .get_pin_id(craft2_id, PinDirection::Output, 0)
+        .unwrap();
+    let m_in1 = app.get_pin_id(merger_id, PinDirection::Input, 1).unwrap();
+    
+    println!("Before second link: craft2 out rate = {:?}", app.get_node_pin_rates(craft2_id).unwrap().1[0]);
+    
+    let result2 = app.create_link(c2_out, m_in1);
+    if let Err(ref e) = result2 {
+        println!("Second link error: {:?}", e);
+    }
+    if let Ok((_id, ref warn)) = result2 {
+        println!("Second link warning: {:?}", warn);
+    }
+    result2.expect("Second link failed");
+
+    // Check merger state: inputs=[10, 30], output=40
+    let (m_ins, m_outs) = app.get_node_pin_rates(merger_id).unwrap();
+    println!("Merger after both links: ins={:?}, outs={:?}", m_ins, m_outs);
+
+    let in0 = m_ins[0].as_ref().unwrap();
+    let in1 = m_ins[1].as_ref().unwrap();
+    let out = m_outs[0].as_ref().unwrap();
+    assert!(
+        in0 == "10" || in0 == "10/1",
+        "Input 0 should be 10, got: {}",
+        in0
+    );
+    assert!(
+        in1 == "30" || in1 == "30/1",
+        "Input 1 should be 30, got: {}",
+        in1
+    );
+    assert!(
+        out == "40" || out == "40/1",
+        "Output should be 40 (10+30), got: {}",
+        out
+    );
+
+    // Now change craft1's rate to 50
+    app.set_pin_rate(
+        craft1_id,
+        PinDirection::Output,
+        0,
+        FractionalNumber::new(50, 1),
+    )
+    .expect("Failed to update craft1 rate");
+
+    // Check merger state: inputs=[50, 30], output=80
+    // IMPORTANT: craft2's rate should remain 30, not change
+    let (m_ins2, m_outs2) = app.get_node_pin_rates(merger_id).unwrap();
+    let (c2_ins, c2_outs) = app.get_node_pin_rates(craft2_id).unwrap();
+    println!(
+        "After craft1 change: merger ins={:?}, outs={:?}, craft2 outs={:?}",
+        m_ins2, m_outs2, c2_outs
+    );
+
+    let in0_after = m_ins2[0].as_ref().unwrap();
+    let in1_after = m_ins2[1].as_ref().unwrap();
+    let out_after = m_outs2[0].as_ref().unwrap();
+    let c2_out_rate = c2_outs[0].as_ref().unwrap();
+
+    assert!(
+        in0_after == "50" || in0_after == "50/1",
+        "Input 0 should be 50, got: {}",
+        in0_after
+    );
+    // Craft2 and merger input 1 should remain 30, NOT reset to 0
+    assert!(
+        in1_after == "30" || in1_after == "30/1",
+        "Input 1 should remain 30 (unchanged), got: {}",
+        in1_after
+    );
+    assert!(
+        c2_out_rate == "30" || c2_out_rate == "30/1",
+        "Craft2 output should remain 30, got: {}",
+        c2_out_rate
+    );
+    assert!(
+        out_after == "80" || out_after == "80/1",
+        "Output should be 80 (50+30), got: {}",
+        out_after
+    );
+}
+
+/// Test simulating the scenario of dropping a wire from a merger output
+/// to create a new craft node - the craft input should receive the merger output's rate.
+#[test]
+fn test_connect_merger_output_to_new_craft_input() {
+    let game_data = load_game_data();
+    let mut app = ProductionApp::new();
+
+    // Create a merger with some inputs set up
+    let merger_id = app.add_merger_node();
+    
+    // Set merger input 0 to have rate 20 (simulating a connected source)
+    let m_in0 = app.get_pin_id(merger_id, PinDirection::Input, 0).unwrap();
+    app.set_pin_rate(merger_id, PinDirection::Input, 0, FractionalNumber::new(20, 1))
+        .expect("Failed to set merger input rate");
+
+    // Check merger state: input 0 = 20, output should be 20
+    let (m_ins, m_outs) = app.get_node_pin_rates(merger_id).unwrap();
+    println!("Merger before link: ins={:?}, outs={:?}", m_ins, m_outs);
+    
+    // Verify merger output is 20
+    let m_out_rate = m_outs[0].as_ref().unwrap();
+    assert!(
+        m_out_rate == "20" || m_out_rate == "20/1",
+        "Merger output should be 20, got: {}",
+        m_out_rate
+    );
+
+    // Create a new craft node (simulating what UI does when you drop wire to create node)
+    let craft_id = app
+        .add_craft_node("Iron Ingot", &game_data)
+        .expect("Failed to add craft node");
+
+    // Check craft initial state (should be rate 0)
+    let (c_ins, _c_outs) = app.get_node_pin_rates(craft_id).unwrap();
+    println!("Craft before link: ins={:?}", c_ins);
+
+    // Connect merger output -> craft input
+    // This is what happens when you drop a wire from merger output onto a new craft node
+    let m_out = app.get_pin_id(merger_id, PinDirection::Output, 0).unwrap();
+    let c_in = app.get_pin_id(craft_id, PinDirection::Input, 0).unwrap();
+    
+    let result = app.create_link(m_out, c_in);
+    if let Err(ref e) = result {
+        println!("Link creation error: {:?}", e);
+    }
+    if let Ok((_, ref warn)) = result {
+        println!("Link creation warning: {:?}", warn);
+    }
+    assert!(result.is_ok(), "create_link should succeed, got: {:?}", result.err());
+
+    // After the link, the craft input should receive the merger output's rate (20)
+    let (c_ins_after, c_outs_after) = app.get_node_pin_rates(craft_id).unwrap();
+    let (m_ins_after, m_outs_after) = app.get_node_pin_rates(merger_id).unwrap();
+    println!("After link: craft ins={:?}, outs={:?}", c_ins_after, c_outs_after);
+    println!("After link: merger ins={:?}, outs={:?}", m_ins_after, m_outs_after);
+
+    // Craft input 0 should have rate 20 (from merger output)
+    let c_in0_rate = c_ins_after[0].as_ref().expect("Craft input 0 should have a rate");
+    assert!(
+        c_in0_rate == "20" || c_in0_rate == "20/1",
+        "Craft input should receive merger output rate (20), got: {}",
+        c_in0_rate
     );
 }

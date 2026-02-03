@@ -3717,7 +3717,9 @@ impl TemplateApp {
                                         .get_node_pin_locked_flags(src_prod)
                                         .map(|(_ins, outs)| outs.get(out.output).copied().unwrap_or(false))
                                         .unwrap_or(false);
-                                    if !already_locked {
+                                    // Only lock if pin has a link (otherwise nothing to preserve)
+                                    let has_link = app.production_app.find_link_by_pin(pinid).is_some();
+                                    if !already_locked && has_link {
                                         if let Err(e) = app.production_app.set_pin_locked(pinid, true) {
                                             app.emit_message(format!("Error locking source pin: {}", e), log::Level::Error);
                                         } else {
@@ -3871,7 +3873,9 @@ impl TemplateApp {
                                         .get_node_pin_locked_flags(src_prod)
                                         .map(|(ins, _outs)| ins.get(inp.input).copied().unwrap_or(false))
                                         .unwrap_or(false);
-                                    if !already_locked {
+                                    // Only lock if pin has a link (otherwise nothing to preserve)
+                                    let has_link = app.production_app.find_link_by_pin(pinid).is_some();
+                                    if !already_locked && has_link {
                                         if let Err(e) = app.production_app.set_pin_locked(pinid, true) {
                                             app.emit_message(format!("Error locking source pin: {}", e), log::Level::Error);
                                         } else {
