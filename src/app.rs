@@ -2272,11 +2272,7 @@ impl Default for TemplateApp {
             }
         }
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            // For web, we'll need to load this differently (fetch API, etc.)
-            log::warn!("Web platform: game data loading not yet implemented");
-        }
+
 
         let mut snarl_style = egui_snarl::ui::SnarlStyle::new();
         snarl_style.collapsible = Some(false);
@@ -2388,6 +2384,65 @@ impl TemplateApp {
         }
     }
 
+
+    /// Cross-platform import wrapper
+    fn import_production_chain(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rfd::FileDialog;
+            use std::fs;
+            if let Some(path) = FileDialog::new().add_filter("Ficsit Companion Save", &["fcs", "json"]).pick_file() {
+                match fs::read_to_string(&path) {
+                    Ok(content) => {
+                        match self.production_app.load_from_json(&content, Some(&self.game_data)) {
+                            Ok(()) => {
+                                self.rebuild_snarl_from_production();
+                                self.emit_message(format!("Import applied: {}", path.display()), log::Level::Info);
+                                self.error_message = format!("Import applied: {}", path.display());
+                                self.error_time = 3.0;
+                            }
+                            Err(e) => {
+                                self.emit_message(format!("Import error: {}", e), log::Level::Error);
+                                self.error_message = format!("Import error: {}", e);
+                                self.error_time = 5.0;
+                            }
+                        }
+                    }
+                    Err(e) => self.emit_message(format!("Import failed: {}", e), log::Level::Error),
+                }
+            } else {
+                self.emit_message("Import cancelled", log::Level::Info);
+            }
+        }
+
+
+    }
+
+    /// Cross-platform export wrapper
+    fn export_production_chain(&mut self) {
+        match self.production_app.save_to_json() {
+            Ok(json) => {
+
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    use rfd::FileDialog;
+                    use std::fs;
+                    if let Some(path) = FileDialog::new().set_file_name("production_chain.fcs").save_file() {
+                        match fs::write(&path, json) {
+                            Ok(()) => self.emit_message(format!("Exported: {}", path.display()), log::Level::Info),
+                            Err(e) => self.emit_message(format!("Export failed: {}", e), log::Level::Error),
+                        }
+                    } else {
+                        self.emit_message("Export cancelled", log::Level::Info);
+                    }
+                }
+            }
+            Err(e) => {
+                self.emit_message(format!("Export error: {}", e), log::Level::Error);
+            }
+        }
+    }
+
     /// Load item icon textures into `item_icon_cache` using `cc.egui_ctx`.
     fn load_item_textures(&mut self, cc: &eframe::CreationContext<'_>) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -2467,11 +2522,7 @@ impl TemplateApp {
             );
         }
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Web loading requires fetching assets; skip for now
-            log::warn!("Web: item texture loading not implemented");
-        }
+
     }
 
     /// Build a lightweight GraphNode for insertion into the Snarl.
@@ -2764,21 +2815,16 @@ impl TemplateApp {
                                 self.controls_popup_just_opened = true;
                             }
 
-                        let is_web = cfg!(target_arch = "wasm32");
-
-                        if is_web{
-                            if ui.button("Export").on_hover_text("Export current production chain to disk").clicked() {
-                                 // !TODO: Implement export functionality
-                                 //const std::string path = "production_chain.fcs";
-                                self.emit_message("Export not implemented yet", log::Level::Warn);
+let is_web = cfg!(target_arch = "wasm32");
+// Use cross-platform import/export wrappers (only shown on web)
+                            if is_web {
+                                if ui.button("Export").on_hover_text("Export current production chain to disk").clicked() {
+                                    self.export_production_chain();
+                                }
+                                if ui.button("Import").on_hover_text("Import a production chain from disk").clicked() {
+                                    self.import_production_chain();
+                                }
                             }
-                            if ui.button("Import").on_hover_text("Import a production chain from disk").clicked() {
-                                // !TODO: Implement import functionality
-                                //waitForFileInput();
-                                //if (std::filesystem::exists("_internal_load_file"))
-                                self.emit_message("Import not implemented yet", log::Level::Warn);
-                            }
-                        }
 
                         ui.with_layout(
                             egui::Layout::right_to_left(egui::Align::Center),
@@ -5101,6 +5147,8 @@ impl TemplateApp {
                 ("Ctrl + G", "Group/Ungroup nodes"),
                 ("Ctrl + Left click", "Add to selection"),
             ];
+
+
 
             // Position popup near the cursor when possible
             let pos = ctx
