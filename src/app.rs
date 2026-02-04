@@ -2695,7 +2695,7 @@ impl TemplateApp {
         }
     }
 
-    /// Populate `file_suggestions` from the local saves directory (desktop only).
+    /// Populate `file_suggestions` from the local saves directory (desktop) or localStorage (wasm).
     fn list_save_files(&mut self) {
         self.file_suggestions.clear();
         #[cfg(not(target_arch = "wasm32"))]
@@ -2711,6 +2711,30 @@ impl TemplateApp {
                             if ext.eq_ignore_ascii_case("fcs") {
                                 if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                                     self.file_suggestions.push((stem.to_owned(), false));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Read save file names from localStorage keys that start with "saves/"
+            if let Some(window) = web_sys::window() {
+                if let Ok(Some(storage)) = window.local_storage() {
+                    if let Ok(len) = storage.length() {
+                        for i in 0..len {
+                            if let Ok(Some(key)) = storage.key(i) {
+                                if key.starts_with("saves/") && key.ends_with(".fcs") {
+                                    // Extract name between "saves/" and ".fcs"
+                                    let name = key
+                                        .strip_prefix("saves/")
+                                        .and_then(|s| s.strip_suffix(".fcs"))
+                                        .map(|s| s.to_owned());
+                                    if let Some(n) = name {
+                                        self.file_suggestions.push((n, false));
+                                    }
                                 }
                             }
                         }
@@ -3023,9 +3047,9 @@ impl TemplateApp {
                                 self.controls_popup_just_opened = true;
                             }
 
-let is_web = cfg!(target_arch = "wasm32");
 // Use cross-platform import/export wrappers (only shown on web)
-                            if is_web {
+                            #[cfg(target_arch = "wasm32")]
+                            {
                                 if ui.button("Export").on_hover_text("Export current production chain to disk").clicked() {
                                     self.export_production_chain();
                                 }
@@ -3103,6 +3127,16 @@ let is_web = cfg!(target_arch = "wasm32");
                                 {
                                     let _ = std::fs::remove_file(format!("saves/{}.fcs", d));
                                 }
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    // Remove from localStorage
+                                    if let Some(window) = web_sys::window() {
+                                        if let Ok(Some(storage)) = window.local_storage() {
+                                            let key = format!("saves/{}.fcs", d);
+                                            let _ = storage.remove_item(&key);
+                                        }
+                                    }
+                                }
                                 self.list_save_files();
                             }
                         }
@@ -3141,7 +3175,24 @@ let is_web = cfg!(target_arch = "wasm32");
                                             }
                                             #[cfg(target_arch = "wasm32")]
                                             {
-                                                self.emit_message("Save not implemented for web", log::Level::Warn);
+                                                // Save to localStorage
+                                                if let Some(window) = web_sys::window() {
+                                                    if let Ok(Some(storage)) = window.local_storage() {
+                                                        let key = format!("saves/{}.fcs", self.save_name);
+                                                        match storage.set_item(&key, &json) {
+                                                            Ok(()) => {
+                                                                self.emit_message(format!("Saved: {}", self.save_name), log::Level::Info);
+                                                                // Refresh file list
+                                                                self.list_save_files();
+                                                            }
+                                                            Err(e) => {
+                                                                self.emit_message(format!("Save error: {:?}", e), log::Level::Error);
+                                                            }
+                                                        }
+                                                    } else {
+                                                        self.emit_message("localStorage not available", log::Level::Error);
+                                                    }
+                                                }
                                             }
                                         }
                                         Err(e) => {
@@ -3151,7 +3202,7 @@ let is_web = cfg!(target_arch = "wasm32");
                                 }
                             }
 
-                            // Enable Load only when file exists (desktop); web not implemented
+                            // Enable Load only when file exists (desktop: filesystem; wasm: localStorage)
                             let mut load_enabled = false;
                             #[cfg(not(target_arch = "wasm32"))]
                             {
@@ -3161,7 +3212,14 @@ let is_web = cfg!(target_arch = "wasm32");
                             }
                             #[cfg(target_arch = "wasm32")]
                             {
-                                load_enabled = false;
+                                if !self.save_name.is_empty() {
+                                    if let Some(window) = web_sys::window() {
+                                        if let Ok(Some(storage)) = window.local_storage() {
+                                            let key = format!("saves/{}.fcs", self.save_name);
+                                            load_enabled = storage.get_item(&key).ok().flatten().is_some();
+                                        }
+                                    }
+                                }
                             }
 
                             let load_resp = ui.add_enabled(load_enabled, egui::Button::new("Load")).on_hover_text("Load a production chain");
@@ -3188,7 +3246,31 @@ let is_web = cfg!(target_arch = "wasm32");
                                     }
                                     #[cfg(target_arch = "wasm32")]
                                     {
-                                        self.emit_message("Load not implemented for web", log::Level::Warn);
+                                        // Load from localStorage
+                                        if let Some(window) = web_sys::window() {
+                                            if let Ok(Some(storage)) = window.local_storage() {
+                                                let key = format!("saves/{}.fcs", self.save_name);
+                                                match storage.get_item(&key) {
+                                                    Ok(Some(content)) => {
+                                                        match self.production_app.load_from_json(&content, Some(&self.game_data)) {
+                                                            Ok(()) => {
+                                                                self.rebuild_snarl_from_production();
+                                                                self.emit_message(format!("Loaded: {}", self.save_name), log::Level::Info);
+                                                            }
+                                                            Err(e) => {
+                                                                self.emit_message(format!("Load error: {}", e), log::Level::Error);
+                                                            }
+                                                        }
+                                                    }
+                                                    Ok(None) => {
+                                                        self.emit_message("File not found", log::Level::Error);
+                                                    }
+                                                    Err(e) => {
+                                                        self.emit_message(format!("Load error: {:?}", e), log::Level::Error);
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

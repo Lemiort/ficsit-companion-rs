@@ -76,6 +76,36 @@ We use [Trunk](https://trunkrs.dev/) to build for web target.
 >       - <branch name>
 > ```
 
+## Testing
+
+### Native Tests
+
+Run native tests with:
+
+```bash
+cargo test
+```
+
+### WASM Tests
+
+WASM tests run in a headless browser and test browser-specific functionality like localStorage.
+
+1. Install wasm-pack: `cargo install wasm-pack`
+2. Run tests with Firefox (recommended):
+   ```bash
+   wasm-pack test --headless --firefox
+   ```
+   Or run a specific test file:
+   ```bash
+   wasm-pack test --headless --firefox --test wasm_storage_tests
+   ```
+3. Alternatively, use Chrome (may have issues on some systems):
+   ```bash
+   wasm-pack test --headless --chrome
+   ```
+
+> **Note:** Chrome headless tests may fail on Windows. Firefox is more reliable for WASM testing.
+
 You can test the template app at <https://emilk.github.io/eframe_template/>.
 
 ## Updating egui

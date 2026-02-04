@@ -7,9 +7,9 @@ use crate::node::{
 };
 use crate::pin::{Pin, PinDirection};
 use crate::serialization::{
-    ProductionChainFile, SerializedCraftNode, SerializedLink, SerializedLinkEndpoint,
-    SerializedNode, SerializedOrganizerNode, SerializedPosition, SerializedSinkInput,
-    SerializedSinkNode,
+    ProductionChainFile, SerializedCraftNode, SerializedGroupNode, SerializedLink,
+    SerializedLinkEndpoint, SerializedNode, SerializedOrganizerNode, SerializedPosition,
+    SerializedSinkInput, SerializedSinkNode,
 };
 
 /// Main production app that manages the graph of nodes and links
@@ -4174,9 +4174,183 @@ impl ProductionApp {
                 ins: ins_vec,
                 outs: outs_vec,
             }))
+        } else if let Some(group) = node_box.downcast_ref::<GroupNode>() {
+            // Serialize group node with all contained nodes and links
+            let serialized_nodes = self.serialize_grouped_nodes(&group.grouped_nodes, &group.nodes_base_rate, group.current_rate);
+            let serialized_links = self.serialize_grouped_links(&group.grouped_links);
+            
+            Some(SerializedNode::Group(SerializedGroupNode {
+                kind: 3,
+                pos: SerializedPosition {
+                    x: group.base.position.0,
+                    y: group.base.position.1,
+                },
+                rate: group.current_rate.into(),
+                locked: group.base.ins.iter().chain(group.base.outs.iter()).all(|p| p.locked),
+                name: group.name.clone(),
+                nodes: serialized_nodes,
+                links: serialized_links,
+            }))
         } else {
             None
         }
+    }
+    
+    /// Serialize grouped nodes (nodes within a group) to the file format
+    fn serialize_grouped_nodes(
+        &self,
+        grouped_nodes: &[GroupedNode],
+        nodes_base_rate: &[FractionalNumber],
+        group_rate: FractionalNumber,
+    ) -> Vec<SerializedNode> {
+        let mut result = Vec::new();
+        
+        for (i, grouped_node) in grouped_nodes.iter().enumerate() {
+            let base_rate = nodes_base_rate.get(i).cloned().unwrap_or(FractionalNumber::new(1, 1));
+            // The saved rate should be the current rate (base_rate * group_rate)
+            let current_rate = base_rate * group_rate;
+            
+            match &grouped_node.node_data {
+                GroupedNodeData::Craft {
+                    recipe_name,
+                    num_somersloop,
+                    built,
+                    ins,
+                    outs,
+                    ..
+                } => {
+                    // Check if all pins are locked
+                    let locked = ins.iter().chain(outs.iter()).all(|p| p.locked);
+                    
+                    result.push(SerializedNode::Craft(SerializedCraftNode {
+                        kind: 0,
+                        recipe: recipe_name.clone(),
+                        rate: current_rate.into(),
+                        pos: SerializedPosition {
+                            x: grouped_node.relative_pos.0,
+                            y: grouped_node.relative_pos.1,
+                        },
+                        built: *built,
+                        locked,
+                        num_somersloop: num_somersloop.numerator() as u8,
+                    }));
+                }
+                GroupedNodeData::Organizer {
+                    kind,
+                    item_name,
+                    ins,
+                    outs,
+                } => {
+                    // Build optional pin arrays if they have meaningful data
+                    let mut ins_vec: Option<Vec<crate::serialization::SerializedPinEntry>> = None;
+                    let mut outs_vec: Option<Vec<crate::serialization::SerializedPinEntry>> = None;
+                    
+                    if ins.iter().any(|p| p.base_rate != FractionalNumber::default() || p.locked || p.item_name.is_some()) {
+                        ins_vec = Some(ins.iter().map(|p| crate::serialization::SerializedPinEntry {
+                            item: p.item_name.clone(),
+                            num: p.current_rate.numerator(),
+                            den: p.current_rate.denominator(),
+                            locked: p.locked,
+                        }).collect());
+                    }
+                    
+                    if outs.iter().any(|p| p.base_rate != FractionalNumber::default() || p.locked || p.item_name.is_some()) {
+                        outs_vec = Some(outs.iter().map(|p| crate::serialization::SerializedPinEntry {
+                            item: p.item_name.clone(),
+                            num: p.current_rate.numerator(),
+                            den: p.current_rate.denominator(),
+                            locked: p.locked,
+                        }).collect());
+                    }
+                    
+                    result.push(SerializedNode::Organizer(SerializedOrganizerNode {
+                        kind: kind.to_kind_id(),
+                        pos: SerializedPosition {
+                            x: grouped_node.relative_pos.0,
+                            y: grouped_node.relative_pos.1,
+                        },
+                        item: item_name.clone(),
+                        ins: ins_vec,
+                        outs: outs_vec,
+                    }));
+                }
+                GroupedNodeData::Sink { item_name, ins } => {
+                    let serialized_ins = ins.iter().map(|p| SerializedSinkInput {
+                        item: p.item_name.clone().unwrap_or_default(),
+                        num: p.current_rate.numerator(),
+                        den: p.current_rate.denominator(),
+                        locked: p.locked,
+                    }).collect();
+                    
+                    result.push(SerializedNode::Sink(SerializedSinkNode {
+                        kind: 5,
+                        pos: SerializedPosition {
+                            x: grouped_node.relative_pos.0,
+                            y: grouped_node.relative_pos.1,
+                        },
+                        ins: serialized_ins,
+                    }));
+                }
+                GroupedNodeData::Group {
+                    name,
+                    current_rate: nested_rate,
+                    nodes: nested_nodes,
+                    links: nested_links,
+                    ins,
+                    outs,
+                } => {
+                    // For nested groups, we need to create nodes_base_rate from the nested nodes
+                    // Since nested groups store current rates, we compute base rates by dividing by group rate
+                    let nested_base_rates: Vec<FractionalNumber> = nested_nodes.iter().map(|n| {
+                        match &n.node_data {
+                            GroupedNodeData::Craft { current_rate, .. } => {
+                                if nested_rate.numerator() != 0 {
+                                    *current_rate / *nested_rate
+                                } else {
+                                    *current_rate
+                                }
+                            }
+                            _ => FractionalNumber::new(1, 1),
+                        }
+                    }).collect();
+                    
+                    let serialized_nested = self.serialize_grouped_nodes(nested_nodes, &nested_base_rates, *nested_rate);
+                    let serialized_nested_links = self.serialize_grouped_links(nested_links);
+                    
+                    // Check if all pins are locked
+                    let locked = ins.iter().chain(outs.iter()).all(|p| p.locked);
+                    
+                    result.push(SerializedNode::Group(SerializedGroupNode {
+                        kind: 3,
+                        pos: SerializedPosition {
+                            x: grouped_node.relative_pos.0,
+                            y: grouped_node.relative_pos.1,
+                        },
+                        rate: (*nested_rate).into(),
+                        locked,
+                        name: name.clone(),
+                        nodes: serialized_nested,
+                        links: serialized_nested_links,
+                    }));
+                }
+            }
+        }
+        
+        result
+    }
+    
+    /// Serialize grouped links (links within a group) to the file format
+    fn serialize_grouped_links(&self, grouped_links: &[GroupedLink]) -> Vec<SerializedLink> {
+        grouped_links.iter().map(|link| SerializedLink {
+            start: SerializedLinkEndpoint {
+                node: link.start_node_idx,
+                pin: link.start_pin_idx,
+            },
+            end: SerializedLinkEndpoint {
+                node: link.end_node_idx,
+                pin: link.end_pin_idx,
+            },
+        }).collect()
     }
 
     /// Serialize a link to the file format
