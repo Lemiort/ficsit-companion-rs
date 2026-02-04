@@ -2979,6 +2979,94 @@ impl TemplateApp {
         }
     }
 
+    /// Recursively collect power from grouped nodes (per-recipe breakdown)
+    fn add_grouped_power_breakdown(
+        grouped_nodes: &[crate::node::GroupedNode],
+        nodes_base_rate: &[crate::fractional_number::FractionalNumber],
+        group_rate: crate::fractional_number::FractionalNumber,
+        power_equal_clocks: bool,
+        detailed_power: &mut std::collections::HashMap<String, crate::fractional_number::FractionalNumber>,
+        has_variable_power: &mut bool,
+    ) {
+        for (i, gn) in grouped_nodes.iter().enumerate() {
+            match &gn.node_data {
+                crate::node::GroupedNodeData::Craft {
+                    recipe_name,
+                    recipe_power,
+                    power_exponent,
+                    somersloop_power_exponent,
+                    somersloop_mult,
+                    num_somersloop,
+                    variable_power,
+                    ..
+                } => {
+                    // Compute power for this craft node at its current rate
+                    let base_rate = nodes_base_rate.get(i).cloned().unwrap_or_default();
+                    let rate_value = (base_rate * group_rate).value();
+
+                    if rate_value > 0.0 {
+                        let num_machines = rate_value.ceil().max(1.0);
+                        let num_full_machines = rate_value.floor().max(0.0);
+
+                        let boost = 1.0 + num_somersloop.value() * somersloop_mult.value();
+                        let boost_pow = boost.powf(*somersloop_power_exponent);
+
+                        let power = if power_equal_clocks {
+                            // Same clock: all machines at identical clock
+                            num_machines * recipe_power * boost_pow * (rate_value / num_machines).powf(*power_exponent)
+                        } else {
+                            // Last underclock: full machines plus one partial
+                            let mut p = num_full_machines * recipe_power * boost_pow;
+                            let fractional = rate_value - num_full_machines;
+                            if fractional > 0.0 {
+                                p += recipe_power * boost_pow * fractional.powf(*power_exponent);
+                            }
+                            p
+                        };
+
+                        let power_frac = FractionalNumber::new((power * 1000.0).round() as i64, 1000);
+                        detailed_power
+                            .entry(recipe_name.clone())
+                            .and_modify(|v| *v += power_frac)
+                            .or_insert(power_frac);
+                        *has_variable_power |= *variable_power;
+                    }
+                }
+                crate::node::GroupedNodeData::Group {
+                    nodes,
+                    current_rate,
+                    ..
+                } => {
+                    // For nested groups, create a base_rate array from the nodes and recurse
+                    // The nested group's nodes have their rates already scaled
+                    let nested_base_rates: Vec<FractionalNumber> = nodes.iter().map(|n| {
+                        match &n.node_data {
+                            crate::node::GroupedNodeData::Craft { current_rate: cr, .. } => {
+                                if current_rate.numerator() != 0 {
+                                    *cr / *current_rate
+                                } else {
+                                    *cr
+                                }
+                            }
+                            _ => FractionalNumber::new(1, 1),
+                        }
+                    }).collect();
+                    // Compute nested group's effective rate
+                    let nested_group_rate = nodes_base_rate.get(i).cloned().unwrap_or(FractionalNumber::new(1, 1)) * group_rate;
+                    Self::add_grouped_power_breakdown(
+                        nodes,
+                        &nested_base_rates,
+                        nested_group_rate,
+                        power_equal_clocks,
+                        detailed_power,
+                        has_variable_power,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn separator_text_left(&self, ui: &mut egui::Ui, text: &str) {
         // Draw a separator whose text appears close to the left edge (similar to ImGui::SeparatorText)
         // Add a short visible line at the very left to match ImGui's visual style.
@@ -3424,23 +3512,40 @@ impl TemplateApp {
                     // Show expandable power breakdown (total + per-recipe) similar to Sink Points
                     // Compute total power and per-recipe breakdown
                     // Use ProductionApp's get_node_power_info to match node footer UI values
-                    let mut total_power = FractionalNumber::default();
                     let mut detailed_power: std::collections::HashMap<String, FractionalNumber> = std::collections::HashMap::new();
                     let mut any_power_nodes = false;
+                    let mut has_variable_power = false;
                     for node_any in &self.production_app.nodes {
                         if let Some(craft) = node_any.downcast_ref::<crate::node::CraftNode>() {
                             any_power_nodes = true;
                             // Prefer authoritative per-node power info from ProductionApp
-                            if let Some((same, last, _variable)) = self.production_app.get_node_power_info(craft.base.id) {
+                            if let Some((same, last, variable)) = self.production_app.get_node_power_info(craft.base.id) {
                                 let power_str = if self.power_equal_clocks { same } else { last };
                                 let power = FractionalNumber::from_string(&power_str).unwrap_or_default();
-                                total_power += power.clone();
                                 detailed_power
                                     .entry(craft.recipe_name.clone())
                                     .and_modify(|v| *v += power.clone())
                                     .or_insert(power);
+                                has_variable_power |= variable;
                             }
+                        } else if let Some(group) = node_any.downcast_ref::<crate::node::GroupNode>() {
+                            // Add power from group's contained nodes (per-recipe breakdown)
+                            any_power_nodes = true;
+                            Self::add_grouped_power_breakdown(
+                                &group.grouped_nodes,
+                                &group.nodes_base_rate,
+                                group.current_rate,
+                                self.power_equal_clocks,
+                                &mut detailed_power,
+                                &mut has_variable_power,
+                            );
                         }
+                    }
+
+                    // Calculate total power from detailed breakdown
+                    let mut total_power = FractionalNumber::default();
+                    for (_recipe, power) in &detailed_power {
+                        total_power += *power;
                     }
 
                     if any_power_nodes {
