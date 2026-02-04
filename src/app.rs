@@ -1379,7 +1379,6 @@ impl SnarlViewer {
                             new_value.to_fraction_string()
                         );
                     }
-                    ui.label("x");
                 });
 
                 // Column 3: empty
@@ -3438,18 +3437,6 @@ impl TemplateApp {
                                 total_power += power.clone();
                                 detailed_power
                                     .entry(craft.recipe_name.clone())
-                                    .and_modify(|v| *v += power.clone())
-                                    .or_insert(power);
-                            }
-                        } else if let Some(group) = node_any.downcast_ref::<crate::node::GroupNode>() {
-                            // Include group node power as an itemized row (named by group id)
-                            any_power_nodes = true;
-                            if let Some((same, last, _variable)) = self.production_app.get_node_power_info(group.base.id) {
-                                let power_str = if self.power_equal_clocks { same } else { last };
-                                let power = FractionalNumber::from_string(&power_str).unwrap_or_default();
-                                total_power += power.clone();
-                                detailed_power
-                                    .entry(format!("Group {}", group.base.id))
                                     .and_modify(|v| *v += power.clone())
                                     .or_insert(power);
                             }
