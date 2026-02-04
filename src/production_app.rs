@@ -1572,8 +1572,13 @@ impl ProductionApp {
             let locked = n.base.ins.get(0).map(|p| p.locked).unwrap_or(false);
             let is_game_splitter = n.base.kind == NodeKind::GameSplitter;
             let input_pin_id = n.base.ins.get(0).map(|p| p.id);
-            let input_rate = n.base.ins.get(0).map(|p| p.current_rate).unwrap_or_default();
-            
+            let input_rate = n
+                .base
+                .ins
+                .get(0)
+                .map(|p| p.current_rate)
+                .unwrap_or_default();
+
             n.base.outs.push(Pin::new(
                 pin_id,
                 PinDirection::Output,
@@ -1582,7 +1587,7 @@ impl ProductionApp {
                 locked,
                 FractionalNumber::default(),
             ));
-            
+
             // For GameSplitter, update all output pins' base_rate to 1/N
             if is_game_splitter {
                 let num_outs = n.base.outs.len();
@@ -1590,13 +1595,13 @@ impl ProductionApp {
                 for out_pin in &mut n.base.outs {
                     out_pin.base_rate = new_ratio;
                 }
-                
+
                 if let Some(in_pin_id) = input_pin_id {
                     // Ignore errors - if propagation fails, the pin is still added
                     let _ = self.update_nodes_rate(in_pin_id, input_rate);
                 }
             }
-            
+
             Ok(())
         } else {
             Err("Unsupported node kind for add output".into())
@@ -1719,24 +1724,28 @@ impl ProductionApp {
                     n.base.kind == NodeKind::GameSplitter,
                     n.base.kind == NodeKind::CustomSplitter,
                     n.base.ins.get(0).map(|p| p.id),
-                    n.base.ins.get(0).map(|p| p.current_rate).unwrap_or_default(),
+                    n.base
+                        .ins
+                        .get(0)
+                        .map(|p| p.current_rate)
+                        .unwrap_or_default(),
                     n.base.ins.get(0).map(|p| p.locked).unwrap_or(false),
                 )
             } else {
                 return Err("Unsupported node kind for remove output".into());
             }
         };
-        
+
         // Delete link if exists
         if let Some(link) = self.find_link_by_pin(pin_id) {
             let lid = link.id;
             self.delete_link(lid)?;
         }
-        
+
         // Remove the pin
         if let Some(nm) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
             nm.base.outs.remove(idx);
-            
+
             // For GameSplitter, update remaining outputs' base_rate to 1/N
             if is_game_splitter && !nm.base.outs.is_empty() {
                 let num_outs = nm.base.outs.len();
@@ -1746,7 +1755,7 @@ impl ProductionApp {
                 }
             }
         }
-        
+
         // Recalculate rates after removal
         if is_game_splitter {
             // GameSplitter: recalculate with input rate to redistribute evenly
@@ -1761,7 +1770,11 @@ impl ProductionApp {
                 // Sum remaining output rates
                 let ni = self.find_node_index(node_id).unwrap();
                 if let Some(n) = self.nodes[ni].downcast_ref::<OrganizerNode>() {
-                    n.base.outs.iter().map(|p| p.current_rate).fold(FractionalNumber::default(), |a, b| a + b)
+                    n.base
+                        .outs
+                        .iter()
+                        .map(|p| p.current_rate)
+                        .fold(FractionalNumber::default(), |a, b| a + b)
                 } else {
                     input_rate
                 }
@@ -1770,7 +1783,7 @@ impl ProductionApp {
                 let _ = self.update_nodes_rate(in_pin_id, new_input);
             }
         }
-        
+
         Ok(())
     }
 
@@ -2209,7 +2222,7 @@ impl ProductionApp {
         let mut queue: VecDeque<(u64, bool, bool, bool)> = VecDeque::new();
         let mut visited: HashSet<u64> = HashSet::new();
         queue.push_back((constraint_pin_id, false, true, false));
-        
+
         // Also add the linked pin if constraint has a link (to prevent infinite loop like C++)
         if let Some(link) = self.find_link_by_pin(constraint_pin_id) {
             let other = if link.start_pin_id == constraint_pin_id {
@@ -2220,7 +2233,9 @@ impl ProductionApp {
             queue.push_back((other, true, true, false));
         }
 
-        while let Some((pid, came_from_external, should_follow_link, came_from_multi_side)) = queue.pop_front() {
+        while let Some((pid, came_from_external, should_follow_link, came_from_multi_side)) =
+            queue.pop_front()
+        {
             if !visited.insert(pid) {
                 continue;
             }
@@ -2251,24 +2266,24 @@ impl ProductionApp {
                                 NodeKind::Merger => dir == PinDirection::Input,
                                 _ => false,
                             };
-                            
+
                             if is_multi_side && came_from_external {
                                 multi_pin_constrained.insert(pid);
                             }
-                            
+
                             let is_single_side = match n.base.kind {
                                 NodeKind::Merger => dir == PinDirection::Output,
                                 NodeKind::CustomSplitter => dir == PinDirection::Input,
                                 _ => false,
                             };
-                            
+
                             // KEY LOGIC for organizer propagation:
-                            // - When at multi-side: add single-side pin(s) 
+                            // - When at multi-side: add single-side pin(s)
                             // - When at single-side reached FROM multi-side: DON'T add other multi-side pins
                             //   (they stay as constants in the sum equation)
                             // - When at single-side NOT reached from multi-side (i.e., starting from single-side
                             //   or reached via link): ADD multi-side pins (they become variables)
-                            
+
                             if is_multi_side {
                                 // We're at multi-side - add single-side pin(s), mark as came_from_multi_side
                                 match dir {
@@ -2344,11 +2359,8 @@ impl ProductionApp {
         let mut relevant_pins: Vec<u64> = visited.into_iter().collect();
         // Sort for deterministic iteration order (HashSet iteration is non-deterministic)
         relevant_pins.sort();
-        
-        log::debug!(
-            "[SOLVER] multi_pin_constrained={:?}",
-            multi_pin_constrained
-        );
+
+        log::debug!("[SOLVER] multi_pin_constrained={:?}", multi_pin_constrained);
 
         // Build variable mapping: for craft/group/game-splitter -> one variable per NODE (ratio = pin.base_rate)
         // for Merger/CustomSplitter/Sink -> one variable per PIN (ratio = 1)
@@ -2458,13 +2470,15 @@ impl ProductionApp {
                                         NodeKind::CustomSplitter => n.base.outs.iter().collect(),
                                         _ => vec![],
                                     };
-                                    
+
                                     let any_multi_constrained = multi_side_pins.iter().any(|p| {
-                                        let pin_has_link = self.links.iter().any(|l| l.start_pin_id == p.id || l.end_pin_id == p.id);
+                                        let pin_has_link = self.links.iter().any(|l| {
+                                            l.start_pin_id == p.id || l.end_pin_id == p.id
+                                        });
                                         let is_constraint = p.id == constraint_pin_id;
                                         pin_has_link || p.locked || is_constraint
                                     });
-                                    
+
                                     if !any_multi_constrained {
                                         // No multi-side pins are constrained, so single-side is also constant
                                         locked_rates.insert(*pid, current_rate);
@@ -2482,62 +2496,75 @@ impl ProductionApp {
                                     );
                                 } else {
                                     // Multi-side is unconnected - check if single-side is constrained
-                                    let single_side_pins: Vec<&crate::pin::Pin> = match n.base.kind {
+                                    let single_side_pins: Vec<&crate::pin::Pin> = match n.base.kind
+                                    {
                                         NodeKind::Merger => n.base.outs.iter().collect(),
                                         NodeKind::CustomSplitter => n.base.ins.iter().collect(),
                                         _ => vec![],
                                     };
-                                    
-                                    let single_side_constrained = single_side_pins.iter().any(|p| {
-                                        let pin_has_link = self.links.iter().any(|l| l.start_pin_id == p.id || l.end_pin_id == p.id);
-                                        let is_constraint = p.id == constraint_pin_id;
-                                        pin_has_link || p.locked || is_constraint
-                                    });
-                                
-                                if single_side_constrained {
-                                    // Single side is constrained - check if ALL multi-side pins are unconnected/unlocked
-                                    let multi_side_pins: Vec<&crate::pin::Pin> = match n.base.kind {
-                                        NodeKind::Merger => n.base.ins.iter().collect(),
-                                        NodeKind::CustomSplitter => n.base.outs.iter().collect(),
-                                        _ => vec![],
-                                    };
-                                    
-                                    let all_multi_unconnected = multi_side_pins.iter().all(|p| {
-                                        let pin_has_link = self.links.iter().any(|l| l.start_pin_id == p.id || l.end_pin_id == p.id);
-                                        !pin_has_link && !p.locked && p.id != constraint_pin_id
-                                    });
-                                    
-                                    if all_multi_unconnected {
-                                        // All multi-side pins are unconnected - distribute equally
-                                        let n_multi = multi_side_pins.len() as i64;
-                                        let equal_share = constraint_value / FractionalNumber::new(n_multi, 1);
-                                        locked_rates.insert(*pid, equal_share);
+
+                                    let single_side_constrained =
+                                        single_side_pins.iter().any(|p| {
+                                            let pin_has_link = self.links.iter().any(|l| {
+                                                l.start_pin_id == p.id || l.end_pin_id == p.id
+                                            });
+                                            let is_constraint = p.id == constraint_pin_id;
+                                            pin_has_link || p.locked || is_constraint
+                                        });
+
+                                    if single_side_constrained {
+                                        // Single side is constrained - check if ALL multi-side pins are unconnected/unlocked
+                                        let multi_side_pins: Vec<&crate::pin::Pin> =
+                                            match n.base.kind {
+                                                NodeKind::Merger => n.base.ins.iter().collect(),
+                                                NodeKind::CustomSplitter => {
+                                                    n.base.outs.iter().collect()
+                                                }
+                                                _ => vec![],
+                                            };
+
+                                        let all_multi_unconnected =
+                                            multi_side_pins.iter().all(|p| {
+                                                let pin_has_link = self.links.iter().any(|l| {
+                                                    l.start_pin_id == p.id || l.end_pin_id == p.id
+                                                });
+                                                !pin_has_link
+                                                    && !p.locked
+                                                    && p.id != constraint_pin_id
+                                            });
+
+                                        if all_multi_unconnected {
+                                            // All multi-side pins are unconnected - distribute equally
+                                            let n_multi = multi_side_pins.len() as i64;
+                                            let equal_share = constraint_value
+                                                / FractionalNumber::new(n_multi, 1);
+                                            locked_rates.insert(*pid, equal_share);
+                                            log::debug!(
+                                                "[SOLVER] pin {} is unconnected multi-side, all others also unconnected - distributing equally with rate {}",
+                                                *pid,
+                                                equal_share.to_fraction_string()
+                                            );
+                                            continue;
+                                        } else {
+                                            // Some multi-side pins are connected/locked - this one is a variable
+                                            log::debug!(
+                                                "[SOLVER] pin {} is unconnected multi-side organizer but single side is constrained, keeping as variable",
+                                                *pid
+                                            );
+                                            // Continue to variable assignment
+                                        }
+                                    } else {
+                                        // Single side is also not constrained, treat as constant
+                                        locked_rates.insert(*pid, current_rate);
                                         log::debug!(
-                                            "[SOLVER] pin {} is unconnected multi-side, all others also unconnected - distributing equally with rate {}",
+                                            "[SOLVER] pin {} is unconnected multi-side organizer (single side unconstrained), treating as constant with rate {}",
                                             *pid,
-                                            equal_share.to_fraction_string()
+                                            current_rate.to_fraction_string()
                                         );
                                         continue;
-                                    } else {
-                                        // Some multi-side pins are connected/locked - this one is a variable
-                                        log::debug!(
-                                            "[SOLVER] pin {} is unconnected multi-side organizer but single side is constrained, keeping as variable",
-                                            *pid
-                                        );
-                                        // Continue to variable assignment
                                     }
-                                } else {
-                                    // Single side is also not constrained, treat as constant
-                                    locked_rates.insert(*pid, current_rate);
-                                    log::debug!(
-                                        "[SOLVER] pin {} is unconnected multi-side organizer (single side unconstrained), treating as constant with rate {}",
-                                        *pid,
-                                        current_rate.to_fraction_string()
-                                    );
-                                    continue;
                                 }
                             }
-                        }
                         } // end of else (Merger/CustomSplitter)
                     } else if node_any.downcast_ref::<SinkNode>().is_some() {
                         let has_link = self
@@ -2826,12 +2853,12 @@ impl ProductionApp {
         for link in &self.links {
             let start_in = relevant_pins.contains(&link.start_pin_id);
             let end_in = relevant_pins.contains(&link.end_pin_id);
-            
+
             // Skip if neither end is in relevant_pins
             if !start_in && !end_in {
                 continue;
             }
-            
+
             let s = link.start_pin_id;
             let e = link.end_pin_id;
             let mut eq = vec![FractionalNumber::new(0, 1); num_vars];
@@ -3357,7 +3384,9 @@ impl ProductionApp {
                 n_any.current_rate = saved_rate;
                 // Recalculate internal node current_rates from base_rate * group rate
                 for (i, grouped_node) in n_any.grouped_nodes.iter_mut().enumerate() {
-                    if let crate::node::GroupedNodeData::Craft { current_rate, .. } = &mut grouped_node.node_data {
+                    if let crate::node::GroupedNodeData::Craft { current_rate, .. } =
+                        &mut grouped_node.node_data
+                    {
                         let base = n_any.nodes_base_rate.get(i).cloned().unwrap_or_default();
                         *current_rate = base * saved_rate;
                     }
@@ -4176,9 +4205,13 @@ impl ProductionApp {
             }))
         } else if let Some(group) = node_box.downcast_ref::<GroupNode>() {
             // Serialize group node with all contained nodes and links
-            let serialized_nodes = self.serialize_grouped_nodes(&group.grouped_nodes, &group.nodes_base_rate, group.current_rate);
+            let serialized_nodes = self.serialize_grouped_nodes(
+                &group.grouped_nodes,
+                &group.nodes_base_rate,
+                group.current_rate,
+            );
             let serialized_links = self.serialize_grouped_links(&group.grouped_links);
-            
+
             Some(SerializedNode::Group(SerializedGroupNode {
                 kind: 3,
                 pos: SerializedPosition {
@@ -4186,7 +4219,12 @@ impl ProductionApp {
                     y: group.base.position.1,
                 },
                 rate: group.current_rate.into(),
-                locked: group.base.ins.iter().chain(group.base.outs.iter()).all(|p| p.locked),
+                locked: group
+                    .base
+                    .ins
+                    .iter()
+                    .chain(group.base.outs.iter())
+                    .all(|p| p.locked),
                 name: group.name.clone(),
                 nodes: serialized_nodes,
                 links: serialized_links,
@@ -4195,7 +4233,7 @@ impl ProductionApp {
             None
         }
     }
-    
+
     /// Serialize grouped nodes (nodes within a group) to the file format
     fn serialize_grouped_nodes(
         &self,
@@ -4204,12 +4242,15 @@ impl ProductionApp {
         group_rate: FractionalNumber,
     ) -> Vec<SerializedNode> {
         let mut result = Vec::new();
-        
+
         for (i, grouped_node) in grouped_nodes.iter().enumerate() {
-            let base_rate = nodes_base_rate.get(i).cloned().unwrap_or(FractionalNumber::new(1, 1));
+            let base_rate = nodes_base_rate
+                .get(i)
+                .cloned()
+                .unwrap_or(FractionalNumber::new(1, 1));
             // The saved rate should be the current rate (base_rate * group_rate)
             let current_rate = base_rate * group_rate;
-            
+
             match &grouped_node.node_data {
                 GroupedNodeData::Craft {
                     recipe_name,
@@ -4221,7 +4262,7 @@ impl ProductionApp {
                 } => {
                     // Check if all pins are locked
                     let locked = ins.iter().chain(outs.iter()).all(|p| p.locked);
-                    
+
                     result.push(SerializedNode::Craft(SerializedCraftNode {
                         kind: 0,
                         recipe: recipe_name.clone(),
@@ -4244,25 +4285,41 @@ impl ProductionApp {
                     // Build optional pin arrays if they have meaningful data
                     let mut ins_vec: Option<Vec<crate::serialization::SerializedPinEntry>> = None;
                     let mut outs_vec: Option<Vec<crate::serialization::SerializedPinEntry>> = None;
-                    
-                    if ins.iter().any(|p| p.base_rate != FractionalNumber::default() || p.locked || p.item_name.is_some()) {
-                        ins_vec = Some(ins.iter().map(|p| crate::serialization::SerializedPinEntry {
-                            item: p.item_name.clone(),
-                            num: p.current_rate.numerator(),
-                            den: p.current_rate.denominator(),
-                            locked: p.locked,
-                        }).collect());
+
+                    if ins.iter().any(|p| {
+                        p.base_rate != FractionalNumber::default()
+                            || p.locked
+                            || p.item_name.is_some()
+                    }) {
+                        ins_vec = Some(
+                            ins.iter()
+                                .map(|p| crate::serialization::SerializedPinEntry {
+                                    item: p.item_name.clone(),
+                                    num: p.current_rate.numerator(),
+                                    den: p.current_rate.denominator(),
+                                    locked: p.locked,
+                                })
+                                .collect(),
+                        );
                     }
-                    
-                    if outs.iter().any(|p| p.base_rate != FractionalNumber::default() || p.locked || p.item_name.is_some()) {
-                        outs_vec = Some(outs.iter().map(|p| crate::serialization::SerializedPinEntry {
-                            item: p.item_name.clone(),
-                            num: p.current_rate.numerator(),
-                            den: p.current_rate.denominator(),
-                            locked: p.locked,
-                        }).collect());
+
+                    if outs.iter().any(|p| {
+                        p.base_rate != FractionalNumber::default()
+                            || p.locked
+                            || p.item_name.is_some()
+                    }) {
+                        outs_vec = Some(
+                            outs.iter()
+                                .map(|p| crate::serialization::SerializedPinEntry {
+                                    item: p.item_name.clone(),
+                                    num: p.current_rate.numerator(),
+                                    den: p.current_rate.denominator(),
+                                    locked: p.locked,
+                                })
+                                .collect(),
+                        );
                     }
-                    
+
                     result.push(SerializedNode::Organizer(SerializedOrganizerNode {
                         kind: kind.to_kind_id(),
                         pos: SerializedPosition {
@@ -4275,13 +4332,16 @@ impl ProductionApp {
                     }));
                 }
                 GroupedNodeData::Sink { item_name, ins } => {
-                    let serialized_ins = ins.iter().map(|p| SerializedSinkInput {
-                        item: p.item_name.clone().unwrap_or_default(),
-                        num: p.current_rate.numerator(),
-                        den: p.current_rate.denominator(),
-                        locked: p.locked,
-                    }).collect();
-                    
+                    let serialized_ins = ins
+                        .iter()
+                        .map(|p| SerializedSinkInput {
+                            item: p.item_name.clone().unwrap_or_default(),
+                            num: p.current_rate.numerator(),
+                            den: p.current_rate.denominator(),
+                            locked: p.locked,
+                        })
+                        .collect();
+
                     result.push(SerializedNode::Sink(SerializedSinkNode {
                         kind: 5,
                         pos: SerializedPosition {
@@ -4301,8 +4361,9 @@ impl ProductionApp {
                 } => {
                     // For nested groups, we need to create nodes_base_rate from the nested nodes
                     // Since nested groups store current rates, we compute base rates by dividing by group rate
-                    let nested_base_rates: Vec<FractionalNumber> = nested_nodes.iter().map(|n| {
-                        match &n.node_data {
+                    let nested_base_rates: Vec<FractionalNumber> = nested_nodes
+                        .iter()
+                        .map(|n| match &n.node_data {
                             GroupedNodeData::Craft { current_rate, .. } => {
                                 if nested_rate.numerator() != 0 {
                                     *current_rate / *nested_rate
@@ -4311,15 +4372,19 @@ impl ProductionApp {
                                 }
                             }
                             _ => FractionalNumber::new(1, 1),
-                        }
-                    }).collect();
-                    
-                    let serialized_nested = self.serialize_grouped_nodes(nested_nodes, &nested_base_rates, *nested_rate);
+                        })
+                        .collect();
+
+                    let serialized_nested = self.serialize_grouped_nodes(
+                        nested_nodes,
+                        &nested_base_rates,
+                        *nested_rate,
+                    );
                     let serialized_nested_links = self.serialize_grouped_links(nested_links);
-                    
+
                     // Check if all pins are locked
                     let locked = ins.iter().chain(outs.iter()).all(|p| p.locked);
-                    
+
                     result.push(SerializedNode::Group(SerializedGroupNode {
                         kind: 3,
                         pos: SerializedPosition {
@@ -4335,22 +4400,25 @@ impl ProductionApp {
                 }
             }
         }
-        
+
         result
     }
-    
+
     /// Serialize grouped links (links within a group) to the file format
     fn serialize_grouped_links(&self, grouped_links: &[GroupedLink]) -> Vec<SerializedLink> {
-        grouped_links.iter().map(|link| SerializedLink {
-            start: SerializedLinkEndpoint {
-                node: link.start_node_idx,
-                pin: link.start_pin_idx,
-            },
-            end: SerializedLinkEndpoint {
-                node: link.end_node_idx,
-                pin: link.end_pin_idx,
-            },
-        }).collect()
+        grouped_links
+            .iter()
+            .map(|link| SerializedLink {
+                start: SerializedLinkEndpoint {
+                    node: link.start_node_idx,
+                    pin: link.start_pin_idx,
+                },
+                end: SerializedLinkEndpoint {
+                    node: link.end_node_idx,
+                    pin: link.end_pin_idx,
+                },
+            })
+            .collect()
     }
 
     /// Serialize a link to the file format

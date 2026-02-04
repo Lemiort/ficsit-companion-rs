@@ -750,7 +750,9 @@ fn test_connect_craft_output_to_merger_input() {
     );
 
     // Connected input (index 0) should have rate 20
-    let in0_rate = m_ins_after[0].as_ref().expect("Input 0 rate should be Some");
+    let in0_rate = m_ins_after[0]
+        .as_ref()
+        .expect("Input 0 rate should be Some");
     assert!(
         in0_rate == "20" || in0_rate == "20/1",
         "Merger input 0 should have rate 20 (from craft), got: {}",
@@ -803,20 +805,19 @@ fn test_merger_inputs_independent_output_adjusts() {
     let merger_id = app.add_merger_node();
 
     // Connect craft1 output -> merger input 0
-    let c1_out = app
-        .get_pin_id(craft1_id, PinDirection::Output, 0)
-        .unwrap();
+    let c1_out = app.get_pin_id(craft1_id, PinDirection::Output, 0).unwrap();
     let m_in0 = app.get_pin_id(merger_id, PinDirection::Input, 0).unwrap();
     app.create_link(c1_out, m_in0).expect("First link failed");
 
     // Connect craft2 output -> merger input 1
-    let c2_out = app
-        .get_pin_id(craft2_id, PinDirection::Output, 0)
-        .unwrap();
+    let c2_out = app.get_pin_id(craft2_id, PinDirection::Output, 0).unwrap();
     let m_in1 = app.get_pin_id(merger_id, PinDirection::Input, 1).unwrap();
-    
-    println!("Before second link: craft2 out rate = {:?}", app.get_node_pin_rates(craft2_id).unwrap().1[0]);
-    
+
+    println!(
+        "Before second link: craft2 out rate = {:?}",
+        app.get_node_pin_rates(craft2_id).unwrap().1[0]
+    );
+
     let result2 = app.create_link(c2_out, m_in1);
     if let Err(ref e) = result2 {
         println!("Second link error: {:?}", e);
@@ -828,7 +829,10 @@ fn test_merger_inputs_independent_output_adjusts() {
 
     // Check merger state: inputs=[10, 30], output=40
     let (m_ins, m_outs) = app.get_node_pin_rates(merger_id).unwrap();
-    println!("Merger after both links: ins={:?}, outs={:?}", m_ins, m_outs);
+    println!(
+        "Merger after both links: ins={:?}, outs={:?}",
+        m_ins, m_outs
+    );
 
     let in0 = m_ins[0].as_ref().unwrap();
     let in1 = m_ins[1].as_ref().unwrap();
@@ -904,16 +908,21 @@ fn test_connect_merger_output_to_new_craft_input() {
 
     // Create a merger with some inputs set up
     let merger_id = app.add_merger_node();
-    
+
     // Set merger input 0 to have rate 20 (simulating a connected source)
     let m_in0 = app.get_pin_id(merger_id, PinDirection::Input, 0).unwrap();
-    app.set_pin_rate(merger_id, PinDirection::Input, 0, FractionalNumber::new(20, 1))
-        .expect("Failed to set merger input rate");
+    app.set_pin_rate(
+        merger_id,
+        PinDirection::Input,
+        0,
+        FractionalNumber::new(20, 1),
+    )
+    .expect("Failed to set merger input rate");
 
     // Check merger state: input 0 = 20, output should be 20
     let (m_ins, m_outs) = app.get_node_pin_rates(merger_id).unwrap();
     println!("Merger before link: ins={:?}, outs={:?}", m_ins, m_outs);
-    
+
     // Verify merger output is 20
     let m_out_rate = m_outs[0].as_ref().unwrap();
     assert!(
@@ -935,7 +944,7 @@ fn test_connect_merger_output_to_new_craft_input() {
     // This is what happens when you drop a wire from merger output onto a new craft node
     let m_out = app.get_pin_id(merger_id, PinDirection::Output, 0).unwrap();
     let c_in = app.get_pin_id(craft_id, PinDirection::Input, 0).unwrap();
-    
+
     let result = app.create_link(m_out, c_in);
     if let Err(ref e) = result {
         println!("Link creation error: {:?}", e);
@@ -943,16 +952,28 @@ fn test_connect_merger_output_to_new_craft_input() {
     if let Ok((_, ref warn)) = result {
         println!("Link creation warning: {:?}", warn);
     }
-    assert!(result.is_ok(), "create_link should succeed, got: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "create_link should succeed, got: {:?}",
+        result.err()
+    );
 
     // After the link, the craft input should receive the merger output's rate (20)
     let (c_ins_after, c_outs_after) = app.get_node_pin_rates(craft_id).unwrap();
     let (m_ins_after, m_outs_after) = app.get_node_pin_rates(merger_id).unwrap();
-    println!("After link: craft ins={:?}, outs={:?}", c_ins_after, c_outs_after);
-    println!("After link: merger ins={:?}, outs={:?}", m_ins_after, m_outs_after);
+    println!(
+        "After link: craft ins={:?}, outs={:?}",
+        c_ins_after, c_outs_after
+    );
+    println!(
+        "After link: merger ins={:?}, outs={:?}",
+        m_ins_after, m_outs_after
+    );
 
     // Craft input 0 should have rate 20 (from merger output)
-    let c_in0_rate = c_ins_after[0].as_ref().expect("Craft input 0 should have a rate");
+    let c_in0_rate = c_ins_after[0]
+        .as_ref()
+        .expect("Craft input 0 should have a rate");
     assert!(
         c_in0_rate == "20" || c_in0_rate == "20/1",
         "Craft input should receive merger output rate (20), got: {}",
@@ -971,13 +992,18 @@ fn test_splitter_outputs_independent_input_adjusts() {
     let splitter_id = app.add_custom_splitter_node();
 
     // Set splitter input to 60
-    app.set_pin_rate(splitter_id, PinDirection::Input, 0, FractionalNumber::new(60, 1))
-        .expect("Failed to set splitter input rate");
+    app.set_pin_rate(
+        splitter_id,
+        PinDirection::Input,
+        0,
+        FractionalNumber::new(60, 1),
+    )
+    .expect("Failed to set splitter input rate");
 
     // Check splitter state: input = 60, outputs = [20, 20, 20] (equal distribution for 3 outputs)
     let (s_ins, s_outs) = app.get_node_pin_rates(splitter_id).unwrap();
     println!("Splitter initial: ins={:?}, outs={:?}", s_ins, s_outs);
-    
+
     // Input should be 60
     let in_rate = s_ins[0].as_ref().unwrap();
     assert!(
@@ -985,23 +1011,32 @@ fn test_splitter_outputs_independent_input_adjusts() {
         "Input should be 60, got: {}",
         in_rate
     );
-    
+
     // All outputs should be 20 (60 / 3)
     for (i, out) in s_outs.iter().enumerate() {
         let out_rate = out.as_ref().unwrap();
         assert!(
             out_rate == "20" || out_rate == "20/1",
             "Output {} should be 20, got: {}",
-            i, out_rate
+            i,
+            out_rate
         );
     }
 
     // Now set output 1 to 30 - this should adjust the input (output 0 and 2 stay at 20)
-    app.set_pin_rate(splitter_id, PinDirection::Output, 1, FractionalNumber::new(30, 1))
-        .expect("Failed to set splitter output 1");
+    app.set_pin_rate(
+        splitter_id,
+        PinDirection::Output,
+        1,
+        FractionalNumber::new(30, 1),
+    )
+    .expect("Failed to set splitter output 1");
 
     let (s_ins_after, s_outs_after) = app.get_node_pin_rates(splitter_id).unwrap();
-    println!("Splitter after setting out1=30: ins={:?}, outs={:?}", s_ins_after, s_outs_after);
+    println!(
+        "Splitter after setting out1=30: ins={:?}, outs={:?}",
+        s_ins_after, s_outs_after
+    );
 
     // Output 1 should be 30
     let out1_rate = s_outs_after[1].as_ref().unwrap();

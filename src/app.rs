@@ -2240,7 +2240,8 @@ pub struct TemplateApp {
 
     // WASM async file dialog result (used to receive import results from rfd AsyncFileDialog)
     #[serde(skip)]
-    wasm_file_import_result: Option<std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>>,
+    wasm_file_import_result:
+        Option<std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>>,
 
     // Controls popup: whether it's shown and whether it was just opened (ignore input that opened it)
     #[serde(skip)]
@@ -2282,15 +2283,16 @@ impl Default for TemplateApp {
             let json_data = include_str!("../assets/satisfactory.json");
             match game_data.load_from_json(json_data) {
                 Ok(_) => {
-                    log::info!("✓ Loaded {} recipes from embedded game data", game_data.recipes.len());
+                    log::info!(
+                        "✓ Loaded {} recipes from embedded game data",
+                        game_data.recipes.len()
+                    );
                 }
                 Err(e) => {
                     log::error!("✗ Failed to load embedded game data: {}", e);
                 }
             }
         }
-
-
 
         let mut snarl_style = egui_snarl::ui::SnarlStyle::new();
         snarl_style.collapsible = Some(false);
@@ -2403,19 +2405,27 @@ impl TemplateApp {
         }
     }
 
-
     /// Cross-platform import wrapper (desktop implementation)
     #[cfg(not(target_arch = "wasm32"))]
     fn import_production_chain(&mut self) {
         use rfd::FileDialog;
         use std::fs;
-        if let Some(path) = FileDialog::new().add_filter("Ficsit Companion Save", &["fcs", "json"]).pick_file() {
+        if let Some(path) = FileDialog::new()
+            .add_filter("Ficsit Companion Save", &["fcs", "json"])
+            .pick_file()
+        {
             match fs::read_to_string(&path) {
                 Ok(content) => {
-                    match self.production_app.load_from_json(&content, Some(&self.game_data)) {
+                    match self
+                        .production_app
+                        .load_from_json(&content, Some(&self.game_data))
+                    {
                         Ok(()) => {
                             self.rebuild_snarl_from_production();
-                            self.emit_message(format!("Import applied: {}", path.display()), log::Level::Info);
+                            self.emit_message(
+                                format!("Import applied: {}", path.display()),
+                                log::Level::Info,
+                            );
                             self.error_message = format!("Import applied: {}", path.display());
                             self.error_time = 3.0;
                         }
@@ -2437,8 +2447,8 @@ impl TemplateApp {
     #[cfg(target_arch = "wasm32")]
     fn import_production_chain(&mut self) {
         use rfd::AsyncFileDialog;
-        use wasm_bindgen_futures::spawn_local;
         use std::sync::{Arc, Mutex};
+        use wasm_bindgen_futures::spawn_local;
 
         // Shared slot for the async result
         let shared: Arc<Mutex<Option<Result<String, String>>>> = Arc::new(Mutex::new(None));
@@ -2446,7 +2456,7 @@ impl TemplateApp {
 
         spawn_local(async move {
             let file_opt = AsyncFileDialog::new()
-                .add_filter("Ficsit Companion Save", &["fcs", "json"]) 
+                .add_filter("Ficsit Companion Save", &["fcs", "json"])
                 .pick_file()
                 .await;
 
@@ -2476,18 +2486,20 @@ impl TemplateApp {
                 // Create a Blob from the JSON content
                 let blob_parts = js_sys::Array::new();
                 blob_parts.push(&wasm_bindgen::JsValue::from_str(&json));
-                
+
                 let mut blob_opts = web_sys::BlobPropertyBag::new();
                 blob_opts.type_("text/plain");
-                
-                let blob = match web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &blob_opts) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        self.emit_message(format!("Export error: {:?}", e), log::Level::Error);
-                        return;
-                    }
-                };
-                
+
+                let blob =
+                    match web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &blob_opts)
+                    {
+                        Ok(b) => b,
+                        Err(e) => {
+                            self.emit_message(format!("Export error: {:?}", e), log::Level::Error);
+                            return;
+                        }
+                    };
+
                 // Create object URL for the blob
                 let url = match web_sys::Url::create_object_url_with_blob(&blob) {
                     Ok(u) => u,
@@ -2496,7 +2508,7 @@ impl TemplateApp {
                         return;
                     }
                 };
-                
+
                 // Create an anchor element and trigger download
                 let window = web_sys::window().expect("no window");
                 let document = window.document().expect("no document");
@@ -2505,19 +2517,19 @@ impl TemplateApp {
                     .expect("create_element failed")
                     .dyn_into()
                     .expect("not an anchor");
-                
+
                 link.set_href(&url);
                 link.set_download("production_chain.fcs");
-                
+
                 // Append to body, click, and remove
                 let body = document.body().expect("no body");
                 let _ = body.append_child(&link);
                 link.click();
                 let _ = body.remove_child(&link);
-                
+
                 // Clean up the object URL
                 let _ = web_sys::Url::revoke_object_url(&url);
-                
+
                 self.emit_message("Exported: production_chain.fcs", log::Level::Info);
             }
             Err(e) => {
@@ -2610,7 +2622,7 @@ impl TemplateApp {
         {
             use egui::ColorImage;
             use image::ImageFormat;
-            use include_dir::{include_dir, Dir};
+            use include_dir::{Dir, include_dir};
 
             static ICON_DIR: Dir = include_dir!("assets/icons");
 
@@ -2679,10 +2691,11 @@ impl TemplateApp {
                 }
             }
 
-            log::info!("Loaded {} embedded item icons into cache", self.item_icon_cache.len());
+            log::info!(
+                "Loaded {} embedded item icons into cache",
+                self.item_icon_cache.len()
+            );
         }
-
-
     }
 
     /// Build a lightweight GraphNode for insertion into the Snarl.
@@ -2900,7 +2913,10 @@ impl TemplateApp {
             if let Some(res) = opt {
                 match res {
                     Ok(content) => {
-                        match self.production_app.load_from_json(&content, Some(&self.game_data)) {
+                        match self
+                            .production_app
+                            .load_from_json(&content, Some(&self.game_data))
+                        {
                             Ok(()) => {
                                 self.rebuild_snarl_from_production();
                                 self.emit_message("Import applied".to_owned(), log::Level::Info);
@@ -2908,7 +2924,10 @@ impl TemplateApp {
                                 self.error_time = 3.0;
                             }
                             Err(e) => {
-                                self.emit_message(format!("Import error: {}", e), log::Level::Error);
+                                self.emit_message(
+                                    format!("Import error: {}", e),
+                                    log::Level::Error,
+                                );
                                 self.error_message = format!("Import error: {}", e);
                                 self.error_time = 5.0;
                             }
@@ -5437,8 +5456,6 @@ impl TemplateApp {
                 ("Ctrl + G", "Group/Ungroup nodes"),
                 ("Ctrl + Left click", "Add to selection"),
             ];
-
-
 
             // Position popup near the cursor when possible
             let pos = ctx
