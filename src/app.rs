@@ -2272,6 +2272,20 @@ impl Default for TemplateApp {
             }
         }
 
+        // For wasm builds we embed the JSON at compile time and load it
+        #[cfg(target_arch = "wasm32")]
+        {
+            let json_data = include_str!("../assets/satisfactory.json");
+            match game_data.load_from_json(json_data) {
+                Ok(_) => {
+                    log::info!("✓ Loaded {} recipes from embedded game data", game_data.recipes.len());
+                }
+                Err(e) => {
+                    log::error!("✗ Failed to load embedded game data: {}", e);
+                }
+            }
+        }
+
 
 
         let mut snarl_style = egui_snarl::ui::SnarlStyle::new();
@@ -2520,6 +2534,83 @@ impl TemplateApp {
                 "Loaded {} item icons into cache",
                 self.item_icon_cache.len()
             );
+        }
+
+        // WASM: Embed icons at compile-time and load them from the embedded directory
+        #[cfg(target_arch = "wasm32")]
+        {
+            use egui::ColorImage;
+            use image::ImageFormat;
+            use include_dir::{include_dir, Dir};
+
+            static ICON_DIR: Dir = include_dir!("assets/icons");
+
+            // Try loading a special somersloop icon used in node footers (optional)
+            if !self.item_icon_cache.contains_key("Somersloop") {
+                if let Some(file) = ICON_DIR.get_file("Wat_1_64.png") {
+                    let bytes = file.contents();
+                    match image::load_from_memory_with_format(bytes, ImageFormat::Png) {
+                        Ok(img) => {
+                            let img = img.to_rgba8();
+                            let size = [img.width() as usize, img.height() as usize];
+                            let pixels = img.into_raw();
+                            let color_image = ColorImage::from_rgba_unmultiplied(size, &pixels);
+                            let texture = cc.egui_ctx.load_texture(
+                                "Somersloop".to_owned(),
+                                color_image,
+                                egui::TextureOptions::default(),
+                            );
+                            self.item_icon_cache
+                                .insert("Somersloop".to_owned(), texture);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to decode embedded somersloop icon: {}", e);
+                        }
+                    }
+                }
+            }
+
+            for (name, item_rc) in self.game_data.items.iter() {
+                // Avoid duplicate loads
+                if self.item_icon_cache.contains_key(name) {
+                    continue;
+                }
+
+                // Normalize icon path to be relative to the embedded `assets/icons` dir.
+                // Strip common prefixes so lookups like "icons/Foo.png" succeed.
+                let icon_rel = item_rc
+                    .icon_path
+                    .strip_prefix("icons/")
+                    .or_else(|| item_rc.icon_path.strip_prefix("./icons/"))
+                    .unwrap_or(item_rc.icon_path.as_str())
+                    .to_string();
+
+                if let Some(file) = ICON_DIR.get_file(&icon_rel) {
+                    let bytes = file.contents();
+                    match image::load_from_memory(bytes) {
+                        Ok(img) => {
+                            let img = img.to_rgba8();
+                            let size = [img.width() as usize, img.height() as usize];
+                            let pixels = img.into_raw();
+                            let color_image = ColorImage::from_rgba_unmultiplied(size, &pixels);
+                            let texture = cc.egui_ctx.load_texture(
+                                name.clone(),
+                                color_image,
+                                egui::TextureOptions::default(),
+                            );
+                            // Keep the returned TextureHandle alive in the cache
+                            self.item_icon_cache.insert(name.clone(), texture);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to decode embedded icon {}: {}", icon_rel, e);
+                        }
+                    }
+                } else {
+                    log::warn!("Embedded icon not found for {}: {}", name, icon_rel);
+                }
+            }
+
+            log::info!("Loaded {} embedded item icons into cache", self.item_icon_cache.len());
         }
 
 
