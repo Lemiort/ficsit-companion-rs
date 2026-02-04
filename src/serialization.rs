@@ -17,10 +17,10 @@ impl Serialize for SerializedNode {
         S: Serializer,
     {
         match self {
-            SerializedNode::Group(g) => g.serialize(serializer),
-            SerializedNode::Craft(c) => c.serialize(serializer),
-            SerializedNode::Organizer(o) => o.serialize(serializer),
-            SerializedNode::Sink(s) => s.serialize(serializer),
+            Self::Group(g) => g.serialize(serializer),
+            Self::Craft(c) => c.serialize(serializer),
+            Self::Organizer(o) => o.serialize(serializer),
+            Self::Sink(s) => s.serialize(serializer),
         }
     }
 }
@@ -42,27 +42,26 @@ impl<'de> Deserialize<'de> for SerializedNode {
             0 => {
                 let craft: SerializedCraftNode =
                     serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-                Ok(SerializedNode::Craft(craft))
+                Ok(Self::Craft(craft))
             }
             1 | 2 | 4 => {
                 // CustomSplitter, Merger, GameSplitter
                 let org: SerializedOrganizerNode =
                     serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-                Ok(SerializedNode::Organizer(org))
+                Ok(Self::Organizer(org))
             }
             3 => {
                 let group: SerializedGroupNode =
                     serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-                Ok(SerializedNode::Group(group))
+                Ok(Self::Group(group))
             }
             5 => {
                 let sink: SerializedSinkNode =
                     serde_json::from_value(value).map_err(serde::de::Error::custom)?;
-                Ok(SerializedNode::Sink(sink))
+                Ok(Self::Sink(sink))
             }
             _ => Err(serde::de::Error::custom(format!(
-                "unknown node kind: {}",
-                kind
+                "unknown node kind: {kind}"
             ))),
         }
     }
@@ -160,7 +159,7 @@ impl From<FractionalNumber> for SerializedRate {
 
 impl From<SerializedRate> for FractionalNumber {
     fn from(r: SerializedRate) -> Self {
-        FractionalNumber::new(r.num, r.den)
+        Self::new(r.num, r.den)
     }
 }
 
@@ -190,23 +189,23 @@ pub struct ProductionChainFile {
 impl NodeKind {
     pub fn to_kind_id(&self) -> u8 {
         match self {
-            NodeKind::Craft => 0,
-            NodeKind::CustomSplitter => 1,
-            NodeKind::Merger => 2,
-            NodeKind::Group => 3,
-            NodeKind::GameSplitter => 4,
-            NodeKind::Sink => 5,
+            Self::Craft => 0,
+            Self::CustomSplitter => 1,
+            Self::Merger => 2,
+            Self::Group => 3,
+            Self::GameSplitter => 4,
+            Self::Sink => 5,
         }
     }
 
     pub fn from_kind_id(id: u8) -> Option<Self> {
         match id {
-            0 => Some(NodeKind::Craft),
-            1 => Some(NodeKind::CustomSplitter),
-            2 => Some(NodeKind::Merger),
-            3 => Some(NodeKind::Group),
-            4 => Some(NodeKind::GameSplitter),
-            5 => Some(NodeKind::Sink),
+            0 => Some(Self::Craft),
+            1 => Some(Self::CustomSplitter),
+            2 => Some(Self::Merger),
+            3 => Some(Self::Group),
+            4 => Some(Self::GameSplitter),
+            5 => Some(Self::Sink),
             _ => None,
         }
     }

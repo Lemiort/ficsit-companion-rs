@@ -3889,10 +3889,10 @@ impl ProductionApp {
         let end_node_idx = serialized.end.node;
 
         if start_node_idx >= self.nodes.len() {
-            return Err(format!("Invalid start node index: {}", start_node_idx));
+            return Err(format!("Invalid start node index: {start_node_idx}"));
         }
         if end_node_idx >= self.nodes.len() {
-            return Err(format!("Invalid end node index: {}", end_node_idx));
+            return Err(format!("Invalid end node index: {end_node_idx}"));
         }
 
         // Get pin IDs from node indices and pin indices
@@ -4018,13 +4018,13 @@ impl ProductionApp {
             return pins
                 .get(pin_idx)
                 .map(|p| p.id)
-                .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
+                .ok_or_else(|| format!("Pin index {pin_idx} out of bounds"));
         }
 
         Err("Unknown node type".to_owned())
     }
 
-    /// Set link_id on a pin
+    /// Set `link_id` on a pin
     fn set_pin_link_id(&mut self, pin_id: u64, link_id: Option<u64>) -> Result<(), String> {
         for node_box in &mut self.nodes {
             if let Some(craft) = node_box.downcast_mut::<CraftNode>() {
@@ -4057,13 +4057,13 @@ impl ProductionApp {
                 }
             }
         }
-        Err(format!("Pin {} not found", pin_id))
+        Err(format!("Pin {pin_id} not found"))
     }
 
     /// Save production chain to JSON string
     pub fn save_to_json(&self) -> Result<String, String> {
         let file = self.save_to_file();
-        serde_json::to_string_pretty(&file).map_err(|e| format!("Failed to serialize JSON: {}", e))
+        serde_json::to_string_pretty(&file).map_err(|e| format!("Failed to serialize JSON: {e}"))
     }
 
     /// Save production chain to file structure
@@ -4074,7 +4074,7 @@ impl ProductionApp {
         // Build node index map
         let mut node_id_to_index = std::collections::HashMap::new();
         for (idx, node_box) in self.nodes.iter().enumerate() {
-            let node_id = self.get_node_id(node_box);
+            let node_id = Self::get_node_id(node_box);
             node_id_to_index.insert(node_id, idx);
         }
 
@@ -4101,7 +4101,7 @@ impl ProductionApp {
     }
 
     /// Get node ID from any node type
-    fn get_node_id(&self, node_box: &Box<dyn std::any::Any>) -> u64 {
+    fn get_node_id(node_box: &Box<dyn std::any::Any>) -> u64 {
         if let Some(craft) = node_box.downcast_ref::<CraftNode>() {
             craft.base.id
         } else if let Some(sink) = node_box.downcast_ref::<SinkNode>() {
@@ -4210,7 +4210,7 @@ impl ProductionApp {
                 &group.nodes_base_rate,
                 group.current_rate,
             );
-            let serialized_links = self.serialize_grouped_links(&group.grouped_links);
+            let serialized_links = Self::serialize_grouped_links(&group.grouped_links);
 
             Some(SerializedNode::Group(SerializedGroupNode {
                 kind: 3,
@@ -4246,7 +4246,7 @@ impl ProductionApp {
         for (i, grouped_node) in grouped_nodes.iter().enumerate() {
             let base_rate = nodes_base_rate
                 .get(i)
-                .cloned()
+                .copied()
                 .unwrap_or(FractionalNumber::new(1, 1));
             // The saved rate should be the current rate (base_rate * group_rate)
             let current_rate = base_rate * group_rate;
@@ -4331,7 +4331,7 @@ impl ProductionApp {
                         outs: outs_vec,
                     }));
                 }
-                GroupedNodeData::Sink { item_name, ins } => {
+                GroupedNodeData::Sink { item_name: _, ins } => {
                     let serialized_ins = ins
                         .iter()
                         .map(|p| SerializedSinkInput {
@@ -4380,7 +4380,7 @@ impl ProductionApp {
                         &nested_base_rates,
                         *nested_rate,
                     );
-                    let serialized_nested_links = self.serialize_grouped_links(nested_links);
+                    let serialized_nested_links = Self::serialize_grouped_links(nested_links);
 
                     // Check if all pins are locked
                     let locked = ins.iter().chain(outs.iter()).all(|p| p.locked);
@@ -4405,7 +4405,7 @@ impl ProductionApp {
     }
 
     /// Serialize grouped links (links within a group) to the file format
-    fn serialize_grouped_links(&self, grouped_links: &[GroupedLink]) -> Vec<SerializedLink> {
+    fn serialize_grouped_links(grouped_links: &[GroupedLink]) -> Vec<SerializedLink> {
         grouped_links
             .iter()
             .map(|link| SerializedLink {

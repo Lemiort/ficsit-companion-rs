@@ -76,7 +76,7 @@ impl Recipe {
         is_spoiler: bool,
     ) -> Self {
         let display_name = if alternate {
-            format!("*{}", name)
+            format!("*{name}")
         } else {
             name.clone()
         };
@@ -84,10 +84,10 @@ impl Recipe {
         let lower_name = name.to_lowercase();
 
         let mut lower_ingredients = Vec::new();
-        for item in ins.iter() {
+        for item in &ins {
             lower_ingredients.push(item.item_name.to_lowercase());
         }
-        for item in outs.iter() {
+        for item in &outs {
             lower_ingredients.push(item.item_name.to_lowercase());
         }
 

@@ -33,7 +33,7 @@ impl Settings {
 }
 
 use crate::pin::PinDirection;
-use std::{collections::HashMap, i64};
+use std::collections::HashMap;
 
 #[derive(Default, Debug)]
 struct SnarlViewer {
@@ -122,7 +122,7 @@ impl SnarlViewer {
     // Fixed inset before the footer '+' (used for both input and output placements)
     const FOOTER_ADD_INSET: f32 = 48.0;
 
-    /// Update settings from TemplateApp (call this once per frame)
+    /// Update settings from `TemplateApp` (call this once per frame)
     fn sync_settings(&mut self, new_settings: &Settings) {
         self.settings = new_settings.clone();
     }
@@ -367,9 +367,9 @@ impl SnarlViewer {
         std::mem::take(&mut self.temporary_locks)
     }
 
-    /// Rebuild the node display cache from ProductionApp.
+    /// Rebuild the node display cache from `ProductionApp`.
     /// Called once per frame before rendering.
-    /// This replaces storing display data in EditorNode - now ProductionApp is the single source of truth.
+    /// This replaces storing display data in `EditorNode` - now `ProductionApp` is the single source of truth.
     fn rebuild_node_cache(
         &mut self,
         production_app: &ProductionApp,
@@ -397,11 +397,11 @@ impl SnarlViewer {
                     .iter()
                     .map(|opt| {
                         opt.as_ref().and_then(|n: &String| {
-                            item_icon_cache.get(n).map(|h| h.id()).and_then(|icon| {
-                                Some(ItemData {
+                            item_icon_cache.get(n).map(|h| h.id()).map(|icon| {
+                                ItemData {
                                     name: n.clone(),
                                     icon,
-                                })
+                                }
                             })
                         })
                     })
@@ -410,11 +410,11 @@ impl SnarlViewer {
                     .iter()
                     .map(|opt| {
                         opt.as_ref().and_then(|n: &String| {
-                            item_icon_cache.get(n).map(|h| h.id()).and_then(|icon| {
-                                Some(ItemData {
+                            item_icon_cache.get(n).map(|h| h.id()).map(|icon| {
+                                ItemData {
                                     name: n.clone(),
                                     icon,
-                                })
+                                }
                             })
                         })
                     })
@@ -980,7 +980,7 @@ impl SnarlViewer {
     // TODO: Phase 5 - This should only read from cache and queue PendingChange, not modify nodes directly
     fn sync_merger_splitter(
         &mut self,
-        snarl: &mut egui_snarl::Snarl<GraphNode>,
+        snarl: &egui_snarl::Snarl<GraphNode>,
         node_id: egui_snarl::NodeId,
     ) {
         // Get node type from the snarl
@@ -2406,6 +2406,7 @@ impl TemplateApp {
 
     /// Cross-platform import wrapper (desktop implementation)
     #[cfg(not(target_arch = "wasm32"))]
+    #[expect(dead_code)]
     fn import_production_chain(&mut self) {
         use rfd::FileDialog;
         use std::fs;
@@ -2486,8 +2487,8 @@ impl TemplateApp {
                 let blob_parts = js_sys::Array::new();
                 blob_parts.push(&wasm_bindgen::JsValue::from_str(&json));
 
-                let mut blob_opts = web_sys::BlobPropertyBag::new();
-                blob_opts.type_("text/plain");
+                let blob_opts = web_sys::BlobPropertyBag::new();
+                blob_opts.set_type("text/plain");
 
                 let blob =
                     match web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &blob_opts)
@@ -2623,7 +2624,7 @@ impl TemplateApp {
             use image::ImageFormat;
             use include_dir::{Dir, include_dir};
 
-            static ICON_DIR: Dir = include_dir!("assets/icons");
+            static ICON_DIR: Dir<'static> = include_dir!("assets/icons");
 
             // Try loading a special somersloop icon used in node footers (optional)
             if !self.item_icon_cache.contains_key("Somersloop") {
@@ -2864,9 +2865,9 @@ impl TemplateApp {
 
                         // Keep types in sync for organizers (use UI node ids)
                         self.snarl_viewer
-                            .sync_merger_splitter(&mut self.snarl, ui_out);
+                            .sync_merger_splitter(&self.snarl, ui_out);
                         self.snarl_viewer
-                            .sync_merger_splitter(&mut self.snarl, ui_in);
+                            .sync_merger_splitter(&self.snarl, ui_in);
                     }
                 }
             }
@@ -2899,8 +2900,6 @@ impl eframe::App for TemplateApp {
 }
 
 impl TemplateApp {
-    /// Recursively add recipe breakdown from grouped nodes
-
     /// Check whether any in-flight wasm file dialog operations completed and apply their results.
     fn check_wasm_file_results(&mut self) {
         // Import
@@ -3959,7 +3958,7 @@ impl TemplateApp {
                                 }
                             }
                             for p in group.base.ins.iter() {
-                                if let Some(ref item_name) = p.item_name {
+                                if let Some(item_name) = &p.item_name {
                                     if p.link_id.is_none() {
                                         unconnected_input_sum
                                             .entry(item_name.clone())
@@ -4213,7 +4212,7 @@ impl TemplateApp {
                         affected_nodes.insert(out.node);
                         affected_nodes.insert(dest.node);
                         for nid in affected_nodes {
-                            app.snarl_viewer.sync_merger_splitter(&mut app.snarl, nid);
+                            app.snarl_viewer.sync_merger_splitter(&app.snarl, nid);
                         }
                     }
                 }
@@ -4368,13 +4367,13 @@ impl TemplateApp {
                         affected_nodes.insert(src_out.node);
                         affected_nodes.insert(inp.node);
                         for nid in affected_nodes {
-                            app.snarl_viewer.sync_merger_splitter(&mut app.snarl, nid);
+                            app.snarl_viewer.sync_merger_splitter(&app.snarl, nid);
                         }
                     }
                 }
 
                 // Sync the newly created node as well
-                app.snarl_viewer.sync_merger_splitter(&mut app.snarl, new_node);
+                app.snarl_viewer.sync_merger_splitter(&app.snarl, new_node);
             }
 
 
@@ -4665,11 +4664,11 @@ impl TemplateApp {
                                 // Determine if endpoint nodes are Merger or CustomSplitter (pin-level locking)
                                 let out_is_pin_level = matches!(
                                     self.production_app.get_node_kind(out_prod),
-                                    Some(crate::node::NodeKind::Merger) | Some(crate::node::NodeKind::CustomSplitter)
+                                    Some(crate::node::NodeKind::Merger | crate::node::NodeKind::CustomSplitter)
                                 );
                                 let in_is_pin_level = matches!(
                                     self.production_app.get_node_kind(in_prod),
-                                    Some(crate::node::NodeKind::Merger) | Some(crate::node::NodeKind::CustomSplitter)
+                                    Some(crate::node::NodeKind::Merger | crate::node::NodeKind::CustomSplitter)
                                 );
 
                                 // Check if any connected pin is locked and we need to propagate
@@ -4788,7 +4787,7 @@ impl TemplateApp {
                                     for nid in &all_affected {
                                         let is_pin_level_node = matches!(
                                             self.production_app.get_node_kind(*nid),
-                                            Some(crate::node::NodeKind::Merger) | Some(crate::node::NodeKind::CustomSplitter)
+                                            Some(crate::node::NodeKind::Merger | crate::node::NodeKind::CustomSplitter)
                                         );
                                         if !is_pin_level_node {
                                             self.snarl_viewer.ui_locked_nodes.insert(*nid);
@@ -4809,11 +4808,11 @@ impl TemplateApp {
                                 // Determine if endpoint nodes are Merger or CustomSplitter (pin-level locking)
                                 let out_is_pin_level = matches!(
                                     self.production_app.get_node_kind(out_prod),
-                                    Some(crate::node::NodeKind::Merger) | Some(crate::node::NodeKind::CustomSplitter)
+                                    Some(crate::node::NodeKind::Merger | crate::node::NodeKind::CustomSplitter)
                                 );
                                 let in_is_pin_level = matches!(
                                     self.production_app.get_node_kind(in_prod),
-                                    Some(crate::node::NodeKind::Merger) | Some(crate::node::NodeKind::CustomSplitter)
+                                    Some(crate::node::NodeKind::Merger | crate::node::NodeKind::CustomSplitter)
                                 );
 
                                 // Check if any connected pin is locked and we need to propagate
@@ -4933,7 +4932,7 @@ impl TemplateApp {
                                     for nid in &all_affected {
                                         let is_pin_level_node = matches!(
                                             self.production_app.get_node_kind(*nid),
-                                            Some(crate::node::NodeKind::Merger) | Some(crate::node::NodeKind::CustomSplitter)
+                                            Some(crate::node::NodeKind::Merger | crate::node::NodeKind::CustomSplitter)
                                         );
                                         if !is_pin_level_node {
                                             self.snarl_viewer.ui_locked_nodes.insert(*nid);

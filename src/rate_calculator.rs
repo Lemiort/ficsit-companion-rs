@@ -31,10 +31,10 @@ pub enum RateError {
 impl std::fmt::Display for RateError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RateError::NoSolution => write!(f, "No valid solution for production rates"),
-            RateError::NegativeRate => write!(f, "Solution would produce negative rates"),
-            RateError::Contradiction => write!(f, "Contradictory constraints in graph"),
-            RateError::SingularMatrix => write!(f, "Singular matrix in linear system"),
+            Self::NoSolution => write!(f, "No valid solution for production rates"),
+            Self::NegativeRate => write!(f, "Solution would produce negative rates"),
+            Self::Contradiction => write!(f, "Contradictory constraints in graph"),
+            Self::SingularMatrix => write!(f, "Singular matrix in linear system"),
         }
     }
 }
@@ -86,7 +86,7 @@ impl LinearSolver {
             matrix.push(row);
         }
 
-        Ok(LinearSolver {
+        Ok(Self {
             matrix,
             num_variables,
         })
@@ -198,7 +198,7 @@ pub struct PinConstraint {
 #[derive(Debug, Clone)]
 pub struct VariableMapping {
     /// Maps pin ID to (variable index, ratio)
-    /// ratio = base_rate or similar multiplier
+    /// ratio = `base_rate` or similar multiplier
     pub pin_to_variable: HashMap<u64, (usize, FractionalNumber)>,
     pub num_variables: usize,
 }
