@@ -2238,6 +2238,10 @@ pub struct TemplateApp {
     #[serde(skip)]
     context_menu_recipe_filter: String,
 
+    // WASM async file dialog result (used to receive import results from rfd AsyncFileDialog)
+    #[serde(skip)]
+    wasm_file_import_result: Option<std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>>,
+
     // Controls popup: whether it's shown and whether it was just opened (ignore input that opened it)
     #[serde(skip)]
     show_controls_popup: bool,
@@ -2339,6 +2343,7 @@ impl Default for TemplateApp {
             error_message: String::new(),
             error_time: 0.0,
             context_menu_recipe_filter: String::new(),
+            wasm_file_import_result: None,
             build_progress_open: false,
 
             item_icon_cache: std::collections::HashMap::new(),
@@ -2399,57 +2404,121 @@ impl TemplateApp {
     }
 
 
-    /// Cross-platform import wrapper
+    /// Cross-platform import wrapper (desktop implementation)
+    #[cfg(not(target_arch = "wasm32"))]
     fn import_production_chain(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use rfd::FileDialog;
-            use std::fs;
-            if let Some(path) = FileDialog::new().add_filter("Ficsit Companion Save", &["fcs", "json"]).pick_file() {
-                match fs::read_to_string(&path) {
-                    Ok(content) => {
-                        match self.production_app.load_from_json(&content, Some(&self.game_data)) {
-                            Ok(()) => {
-                                self.rebuild_snarl_from_production();
-                                self.emit_message(format!("Import applied: {}", path.display()), log::Level::Info);
-                                self.error_message = format!("Import applied: {}", path.display());
-                                self.error_time = 3.0;
-                            }
-                            Err(e) => {
-                                self.emit_message(format!("Import error: {}", e), log::Level::Error);
-                                self.error_message = format!("Import error: {}", e);
-                                self.error_time = 5.0;
-                            }
+        use rfd::FileDialog;
+        use std::fs;
+        if let Some(path) = FileDialog::new().add_filter("Ficsit Companion Save", &["fcs", "json"]).pick_file() {
+            match fs::read_to_string(&path) {
+                Ok(content) => {
+                    match self.production_app.load_from_json(&content, Some(&self.game_data)) {
+                        Ok(()) => {
+                            self.rebuild_snarl_from_production();
+                            self.emit_message(format!("Import applied: {}", path.display()), log::Level::Info);
+                            self.error_message = format!("Import applied: {}", path.display());
+                            self.error_time = 3.0;
+                        }
+                        Err(e) => {
+                            self.emit_message(format!("Import error: {}", e), log::Level::Error);
+                            self.error_message = format!("Import error: {}", e);
+                            self.error_time = 5.0;
                         }
                     }
-                    Err(e) => self.emit_message(format!("Import failed: {}", e), log::Level::Error),
                 }
-            } else {
-                self.emit_message("Import cancelled", log::Level::Info);
+                Err(e) => self.emit_message(format!("Import failed: {}", e), log::Level::Error),
             }
+        } else {
+            self.emit_message("Import cancelled", log::Level::Info);
         }
-
-
     }
 
-    /// Cross-platform export wrapper
-    fn export_production_chain(&mut self) {
-        match self.production_app.save_to_json() {
-            Ok(json) => {
+    /// Cross-platform import wrapper (wasm/browser using `rfd` async file dialog)
+    #[cfg(target_arch = "wasm32")]
+    fn import_production_chain(&mut self) {
+        use rfd::AsyncFileDialog;
+        use wasm_bindgen_futures::spawn_local;
+        use std::sync::{Arc, Mutex};
 
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    use rfd::FileDialog;
-                    use std::fs;
-                    if let Some(path) = FileDialog::new().set_file_name("production_chain.fcs").save_file() {
-                        match fs::write(&path, json) {
-                            Ok(()) => self.emit_message(format!("Exported: {}", path.display()), log::Level::Info),
-                            Err(e) => self.emit_message(format!("Export failed: {}", e), log::Level::Error),
-                        }
-                    } else {
-                        self.emit_message("Export cancelled", log::Level::Info);
+        // Shared slot for the async result
+        let shared: Arc<Mutex<Option<Result<String, String>>>> = Arc::new(Mutex::new(None));
+        self.wasm_file_import_result = Some(shared.clone());
+
+        spawn_local(async move {
+            let file_opt = AsyncFileDialog::new()
+                .add_filter("Ficsit Companion Save", &["fcs", "json"]) 
+                .pick_file()
+                .await;
+
+            let res = match file_opt {
+                Some(fh) => {
+                    let bytes = fh.read().await;
+                    match String::from_utf8(bytes) {
+                        Ok(s) => Ok(s),
+                        Err(e) => Err(format!("Invalid UTF-8: {}", e)),
                     }
                 }
+                None => Err("Cancelled".to_owned()),
+            };
+
+            let mut guard = shared.lock().unwrap();
+            *guard = Some(res);
+        });
+    }
+
+    /// Cross-platform export wrapper (wasm/browser using direct blob download like C++ version)
+    #[cfg(target_arch = "wasm32")]
+    fn export_production_chain(&mut self) {
+        use wasm_bindgen::JsCast;
+
+        match self.production_app.save_to_json() {
+            Ok(json) => {
+                // Create a Blob from the JSON content
+                let blob_parts = js_sys::Array::new();
+                blob_parts.push(&wasm_bindgen::JsValue::from_str(&json));
+                
+                let mut blob_opts = web_sys::BlobPropertyBag::new();
+                blob_opts.type_("text/plain");
+                
+                let blob = match web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &blob_opts) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        self.emit_message(format!("Export error: {:?}", e), log::Level::Error);
+                        return;
+                    }
+                };
+                
+                // Create object URL for the blob
+                let url = match web_sys::Url::create_object_url_with_blob(&blob) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        self.emit_message(format!("Export error: {:?}", e), log::Level::Error);
+                        return;
+                    }
+                };
+                
+                // Create an anchor element and trigger download
+                let window = web_sys::window().expect("no window");
+                let document = window.document().expect("no document");
+                let link: web_sys::HtmlAnchorElement = document
+                    .create_element("a")
+                    .expect("create_element failed")
+                    .dyn_into()
+                    .expect("not an anchor");
+                
+                link.set_href(&url);
+                link.set_download("production_chain.fcs");
+                
+                // Append to body, click, and remove
+                let body = document.body().expect("no body");
+                let _ = body.append_child(&link);
+                link.click();
+                let _ = body.remove_child(&link);
+                
+                // Clean up the object URL
+                let _ = web_sys::Url::revoke_object_url(&url);
+                
+                self.emit_message("Exported: production_chain.fcs", log::Level::Info);
             }
             Err(e) => {
                 self.emit_message(format!("Export error: {}", e), log::Level::Error);
@@ -2663,6 +2732,9 @@ impl TemplateApp {
                 .collect(),
         );
 
+        // Check for completed WASM file dialog results after rebuilding as well
+        self.check_wasm_file_results();
+
         let mut node_map: std::collections::HashMap<u64, egui_snarl::NodeId> =
             std::collections::HashMap::new();
 
@@ -2777,6 +2849,9 @@ impl eframe::App for TemplateApp {
         // Decrease error time
         self.error_time = (self.error_time - ctx.input(|i| i.unstable_dt)).max(0.0);
 
+        // Check for any completed WASM file dialog operations and apply results
+        self.check_wasm_file_results();
+
         // Sync settings to snarl viewer (do this at the start of each frame)
         self.snarl_viewer.sync_settings(&self.settings);
         self.snarl_viewer.power_equal_clocks = self.power_equal_clocks;
@@ -2788,6 +2863,48 @@ impl eframe::App for TemplateApp {
 }
 
 impl TemplateApp {
+    /// Recursively add recipe breakdown from grouped nodes
+
+    /// Check whether any in-flight wasm file dialog operations completed and apply their results.
+    fn check_wasm_file_results(&mut self) {
+        // Import
+        if let Some(shared) = self.wasm_file_import_result.take() {
+            let opt = {
+                let mut guard = shared.lock().unwrap();
+                guard.take()
+            };
+            if let Some(res) = opt {
+                match res {
+                    Ok(content) => {
+                        match self.production_app.load_from_json(&content, Some(&self.game_data)) {
+                            Ok(()) => {
+                                self.rebuild_snarl_from_production();
+                                self.emit_message("Import applied".to_owned(), log::Level::Info);
+                                self.error_message = "Import applied".to_owned();
+                                self.error_time = 3.0;
+                            }
+                            Err(e) => {
+                                self.emit_message(format!("Import error: {}", e), log::Level::Error);
+                                self.error_message = format!("Import error: {}", e);
+                                self.error_time = 5.0;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if e == "Cancelled" {
+                            self.emit_message("Import cancelled", log::Level::Info);
+                        } else {
+                            self.emit_message(format!("Import failed: {}", e), log::Level::Error);
+                        }
+                    }
+                }
+            } else {
+                // not ready, put it back
+                self.wasm_file_import_result = Some(shared);
+            }
+        }
+    }
+
     /// Recursively add recipe breakdown from grouped nodes
     fn add_grouped_recipe_breakdown(
         grouped_nodes: &[crate::node::GroupedNode],
