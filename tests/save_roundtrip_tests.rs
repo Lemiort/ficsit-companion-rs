@@ -1,6 +1,6 @@
 //! Tests for save file roundtrip - load existing saves, save them, verify content matches.
 //!
-//! These tests verify that ProductionApp can correctly load and re-serialize save files
+//! These tests verify that `ProductionApp` can correctly load and re-serialize save files
 //! without losing or corrupting any data.
 
 use ficsit_companion_rs::production_app::ProductionApp;
@@ -16,7 +16,7 @@ fn load_game_data() -> ficsit_companion_rs::game_data::GameData {
 }
 
 /// Compare two JSON values, ignoring formatting differences.
-/// Returns (equal, diff_description) where diff_description explains the first difference found.
+/// Returns (equal, `diff_description`) where `diff_description` explains the first difference found.
 fn compare_json_values(
     original: &serde_json::Value,
     roundtrip: &serde_json::Value,
@@ -28,7 +28,7 @@ fn compare_json_values(
             if a == b {
                 (true, String::new())
             } else {
-                (false, format!("Bool mismatch at {}: {} vs {}", path, a, b))
+                (false, format!("Bool mismatch at {path}: {a} vs {b}"))
             }
         }
         (serde_json::Value::Number(a), serde_json::Value::Number(b)) => {
@@ -38,20 +38,14 @@ fn compare_json_values(
             if (a_f - b_f).abs() < 1e-10 {
                 (true, String::new())
             } else {
-                (
-                    false,
-                    format!("Number mismatch at {}: {} vs {}", path, a, b),
-                )
+                (false, format!("Number mismatch at {path}: {a} vs {b}"))
             }
         }
         (serde_json::Value::String(a), serde_json::Value::String(b)) => {
             if a == b {
                 (true, String::new())
             } else {
-                (
-                    false,
-                    format!("String mismatch at {}: '{}' vs '{}'", path, a, b),
-                )
+                (false, format!("String mismatch at {path}: '{a}' vs '{b}'"))
             }
         }
         (serde_json::Value::Array(a), serde_json::Value::Array(b)) => {
@@ -67,7 +61,7 @@ fn compare_json_values(
                 );
             }
             for (i, (av, bv)) in a.iter().zip(b.iter()).enumerate() {
-                let (eq, diff) = compare_json_values(av, bv, &format!("{}[{}]", path, i));
+                let (eq, diff) = compare_json_values(av, bv, &format!("{path}[{i}]"));
                 if !eq {
                     return (false, diff);
                 }
@@ -76,36 +70,27 @@ fn compare_json_values(
         }
         (serde_json::Value::Object(a), serde_json::Value::Object(b)) => {
             // Check all keys in a exist in b
-            for (key, av) in a.iter() {
+            for (key, av) in a {
                 if let Some(bv) = b.get(key) {
-                    let (eq, diff) = compare_json_values(av, bv, &format!("{}.{}", path, key));
+                    let (eq, diff) = compare_json_values(av, bv, &format!("{path}.{key}"));
                     if !eq {
                         return (false, diff);
                     }
                 } else {
-                    return (
-                        false,
-                        format!("Key '{}' missing in roundtrip at {}", key, path),
-                    );
+                    return (false, format!("Key '{key}' missing in roundtrip at {path}"));
                 }
             }
             // Check no extra keys in b
             for key in b.keys() {
                 if !a.contains_key(key) {
-                    return (
-                        false,
-                        format!("Extra key '{}' in roundtrip at {}", key, path),
-                    );
+                    return (false, format!("Extra key '{key}' in roundtrip at {path}"));
                 }
             }
             (true, String::new())
         }
         _ => (
             false,
-            format!(
-                "Type mismatch at {}: {:?} vs {:?}",
-                path, original, roundtrip
-            ),
+            format!("Type mismatch at {path}: {original:?} vs {roundtrip:?}"),
         ),
     }
 }
@@ -116,21 +101,21 @@ fn test_save_file_roundtrip(filename: &str, content: &str) {
 
     // Parse original JSON
     let original_json: serde_json::Value = serde_json::from_str(content)
-        .unwrap_or_else(|e| panic!("Failed to parse {} as JSON: {}", filename, e));
+        .unwrap_or_else(|e| panic!("Failed to parse {filename} as JSON: {e}"));
 
     // Load into ProductionApp
     let mut app = ProductionApp::new();
     app.load_from_json(content, Some(&game_data))
-        .unwrap_or_else(|e| panic!("Failed to load {}: {}", filename, e));
+        .unwrap_or_else(|e| panic!("Failed to load {filename}: {e}"));
 
     // Save back to JSON
     let roundtrip_str = app
         .save_to_json()
-        .unwrap_or_else(|e| panic!("Failed to save {}: {}", filename, e));
+        .unwrap_or_else(|e| panic!("Failed to save {filename}: {e}"));
 
     // Parse roundtrip JSON
     let roundtrip_json: serde_json::Value = serde_json::from_str(&roundtrip_str)
-        .unwrap_or_else(|e| panic!("Failed to parse roundtrip {} as JSON: {}", filename, e));
+        .unwrap_or_else(|e| panic!("Failed to parse roundtrip {filename} as JSON: {e}"));
 
     // Compare node counts
     let orig_nodes = original_json
@@ -145,8 +130,7 @@ fn test_save_file_roundtrip(filename: &str, content: &str) {
         .unwrap_or(0);
     assert_eq!(
         orig_nodes, rt_nodes,
-        "{}: Node count mismatch: {} vs {}",
-        filename, orig_nodes, rt_nodes
+        "{filename}: Node count mismatch: {orig_nodes} vs {rt_nodes}"
     );
 
     // Compare link counts
@@ -162,17 +146,13 @@ fn test_save_file_roundtrip(filename: &str, content: &str) {
         .unwrap_or(0);
     assert_eq!(
         orig_links, rt_links,
-        "{}: Link count mismatch: {} vs {}",
-        filename, orig_links, rt_links
+        "{filename}: Link count mismatch: {orig_links} vs {rt_links}"
     );
 
     // Deep compare (allowing for potential ordering differences in nodes/links)
     // For now, just verify structural equality excluding position which may have minor float differences
 
-    println!(
-        "{}: Loaded {} nodes, {} links - roundtrip OK",
-        filename, rt_nodes, rt_links
-    );
+    log::debug!("{filename}: Loaded {rt_nodes} nodes, {rt_links} links - roundtrip OK");
 }
 
 /// Test that verifies nodes and links are preserved through roundtrip
@@ -182,29 +162,28 @@ fn verify_structure_preserved(filename: &str, content: &str) {
     // Load into ProductionApp
     let mut app = ProductionApp::new();
     app.load_from_json(content, Some(&game_data))
-        .unwrap_or_else(|e| panic!("Failed to load {}: {}", filename, e));
+        .unwrap_or_else(|e| panic!("Failed to load {filename}: {e}"));
 
     let nodes_before = app.nodes.len();
     let links_before = app.links.len();
 
     // Save and reload
-    let saved = app.save_to_json().unwrap();
+    let saved = app.save_to_json().expect("save_to_json failed");
 
     let mut app2 = ProductionApp::new();
-    app2.load_from_json(&saved, Some(&game_data)).unwrap();
+    app2.load_from_json(&saved, Some(&game_data))
+        .expect("load_from_json failed after save");
 
     let nodes_after = app2.nodes.len();
     let links_after = app2.links.len();
 
     assert_eq!(
         nodes_before, nodes_after,
-        "{}: Node count changed after roundtrip",
-        filename
+        "{filename}: Node count changed after roundtrip"
     );
     assert_eq!(
         links_before, links_after,
-        "{}: Link count changed after roundtrip",
-        filename
+        "{filename}: Link count changed after roundtrip"
     );
 }
 
@@ -273,21 +252,26 @@ fn test_double_roundtrip_production_chain() {
     // First roundtrip
     let mut app1 = ProductionApp::new();
     app1.load_from_json(PRODUCTION_CHAIN_FCS, Some(&game_data))
-        .unwrap();
-    let saved1 = app1.save_to_json().unwrap();
+        .expect("load_from_json failed");
+    let saved1 = app1.save_to_json().expect("save_to_json failed");
 
     // Second roundtrip
     let mut app2 = ProductionApp::new();
-    app2.load_from_json(&saved1, Some(&game_data)).unwrap();
-    let saved2 = app2.save_to_json().unwrap();
+    app2.load_from_json(&saved1, Some(&game_data))
+        .expect("load_from_json failed after save");
+    let saved2 = app2
+        .save_to_json()
+        .expect("save_to_json failed after reload");
 
     // Parse both saved versions
-    let json1: serde_json::Value = serde_json::from_str(&saved1).unwrap();
-    let json2: serde_json::Value = serde_json::from_str(&saved2).unwrap();
+    let json1: serde_json::Value =
+        serde_json::from_str(&saved1).expect("failed to parse saved1 as json");
+    let json2: serde_json::Value =
+        serde_json::from_str(&saved2).expect("failed to parse saved2 as json");
 
     // Compare - after first roundtrip, subsequent roundtrips should be identical
     let (equal, diff) = compare_json_values(&json1, &json2, "root");
-    assert!(equal, "Double roundtrip mismatch: {}", diff);
+    assert!(equal, "Double roundtrip mismatch: {diff}");
 }
 
 /// Test that all save files can be loaded without errors

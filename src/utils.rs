@@ -277,7 +277,7 @@ mod tests {
         });
         assert!(update_save(&mut save, 2));
         assert_eq!(save["save_version"], 2);
-        assert!(!save["links"][0]["start"].get("is_out").is_some());
-        assert!(!save["links"][0]["end"].get("is_out").is_some());
+        assert!(save["links"][0]["start"].get("is_out").is_none());
+        assert!(save["links"][0]["end"].get("is_out").is_none());
     }
 }

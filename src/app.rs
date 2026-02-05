@@ -397,11 +397,9 @@ impl SnarlViewer {
                     .iter()
                     .map(|opt| {
                         opt.as_ref().and_then(|n: &String| {
-                            item_icon_cache.get(n).map(|h| h.id()).map(|icon| {
-                                ItemData {
-                                    name: n.clone(),
-                                    icon,
-                                }
+                            item_icon_cache.get(n).map(|h| h.id()).map(|icon| ItemData {
+                                name: n.clone(),
+                                icon,
                             })
                         })
                     })
@@ -410,11 +408,9 @@ impl SnarlViewer {
                     .iter()
                     .map(|opt| {
                         opt.as_ref().and_then(|n: &String| {
-                            item_icon_cache.get(n).map(|h| h.id()).map(|icon| {
-                                ItemData {
-                                    name: n.clone(),
-                                    icon,
-                                }
+                            item_icon_cache.get(n).map(|h| h.id()).map(|icon| ItemData {
+                                name: n.clone(),
+                                icon,
                             })
                         })
                     })
@@ -728,7 +724,13 @@ impl SnarlViewer {
         ui.separator();
 
         // Recipe filter box (disabled when filter_item is provided)
-        if filter_item.is_none() {
+        if let Some(item) = filter_item {
+            if filter_by_output {
+                ui.label(format!("Recipes with output: {}", item));
+            } else {
+                ui.label(format!("Recipes with input: {}", item));
+            }
+        } else {
             let filter_response = ui.add(
                 egui::TextEdit::singleline(&mut self.context_menu_recipe_filter)
                     .hint_text("Filter..."),
@@ -736,15 +738,9 @@ impl SnarlViewer {
             if ui.memory(|mem| mem.focused().is_none()) {
                 filter_response.request_focus();
             }
-            ui.separator();
-        } else {
-            if filter_by_output {
-                ui.label(format!("Recipes with output: {}", filter_item.unwrap()));
-            } else {
-                ui.label(format!("Recipes with input: {}", filter_item.unwrap()));
-            }
-            ui.separator();
         }
+
+        ui.separator();
 
         // Show recipes (use cached list from TemplateApp)
         let mut all_recipes: Vec<_> = self
@@ -1242,8 +1238,8 @@ impl SnarlViewer {
                                     + 8.0;
                                 let key = format!("node:{}:somersloop", node_id);
                                 let mut current_somersloop = craft.num_somersloop.clone();
-                                let is_locked = pins.input_locked.get(0).copied().unwrap_or(false)
-                                    || pins.output_locked.get(0).copied().unwrap_or(false);
+                                let is_locked = pins.input_locked.first().copied().unwrap_or(false)
+                                    || pins.output_locked.first().copied().unwrap_or(false);
                                 let node_locked = self.ui_locked_nodes.contains(&node_id);
                                 let resp = self.render_fractional_input(
                                     ui,
@@ -2864,10 +2860,8 @@ impl TemplateApp {
                         let _ = self.snarl.connect(out_pin, in_pin);
 
                         // Keep types in sync for organizers (use UI node ids)
-                        self.snarl_viewer
-                            .sync_merger_splitter(&self.snarl, ui_out);
-                        self.snarl_viewer
-                            .sync_merger_splitter(&self.snarl, ui_in);
+                        self.snarl_viewer.sync_merger_splitter(&self.snarl, ui_out);
+                        self.snarl_viewer.sync_merger_splitter(&self.snarl, ui_in);
                     }
                 }
             }
@@ -2984,7 +2978,10 @@ impl TemplateApp {
         nodes_base_rate: &[crate::fractional_number::FractionalNumber],
         group_rate: crate::fractional_number::FractionalNumber,
         power_equal_clocks: bool,
-        detailed_power: &mut std::collections::HashMap<String, crate::fractional_number::FractionalNumber>,
+        detailed_power: &mut std::collections::HashMap<
+            String,
+            crate::fractional_number::FractionalNumber,
+        >,
         has_variable_power: &mut bool,
     ) {
         for (i, gn) in grouped_nodes.iter().enumerate() {
@@ -3012,7 +3009,10 @@ impl TemplateApp {
 
                         let power = if power_equal_clocks {
                             // Same clock: all machines at identical clock
-                            num_machines * recipe_power * boost_pow * (rate_value / num_machines).powf(*power_exponent)
+                            num_machines
+                                * recipe_power
+                                * boost_pow
+                                * (rate_value / num_machines).powf(*power_exponent)
                         } else {
                             // Last underclock: full machines plus one partial
                             let mut p = num_full_machines * recipe_power * boost_pow;
@@ -3023,7 +3023,8 @@ impl TemplateApp {
                             p
                         };
 
-                        let power_frac = FractionalNumber::new((power * 1000.0).round() as i64, 1000);
+                        let power_frac =
+                            FractionalNumber::new((power * 1000.0).round() as i64, 1000);
                         detailed_power
                             .entry(recipe_name.clone())
                             .and_modify(|v| *v += power_frac)
@@ -3038,9 +3039,12 @@ impl TemplateApp {
                 } => {
                     // For nested groups, create a base_rate array from the nodes and recurse
                     // The nested group's nodes have their rates already scaled
-                    let nested_base_rates: Vec<FractionalNumber> = nodes.iter().map(|n| {
-                        match &n.node_data {
-                            crate::node::GroupedNodeData::Craft { current_rate: cr, .. } => {
+                    let nested_base_rates: Vec<FractionalNumber> = nodes
+                        .iter()
+                        .map(|n| match &n.node_data {
+                            crate::node::GroupedNodeData::Craft {
+                                current_rate: cr, ..
+                            } => {
                                 if current_rate.numerator() != 0 {
                                     *cr / *current_rate
                                 } else {
@@ -3048,10 +3052,14 @@ impl TemplateApp {
                                 }
                             }
                             _ => FractionalNumber::new(1, 1),
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     // Compute nested group's effective rate
-                    let nested_group_rate = nodes_base_rate.get(i).cloned().unwrap_or(FractionalNumber::new(1, 1)) * group_rate;
+                    let nested_group_rate = nodes_base_rate
+                        .get(i)
+                        .cloned()
+                        .unwrap_or(FractionalNumber::new(1, 1))
+                        * group_rate;
                     Self::add_grouped_power_breakdown(
                         nodes,
                         &nested_base_rates,
@@ -3798,7 +3806,7 @@ impl TemplateApp {
                     if !detailed_machines.is_empty() {
                         // Sort buildings alphabetically (case-insensitive)
                         let mut sorted_buildings: Vec<(String, FractionalNumber)> = detailed_machines.into_iter().collect();
-                        sorted_buildings.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+                        sorted_buildings.sort_by_key(|a| a.0.to_lowercase());
 
                         // Include a leading '-' in the sample so we account for negative values when measuring width
                         let machines_width = ui
@@ -3841,7 +3849,7 @@ impl TemplateApp {
                                         .map(|(k, v)| (k.clone(), v.clone()))
                                         .collect();
                                         // Sort recipes alphabetically (case-insensitive)
-                                        rec_vec.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+                                        rec_vec.sort_by_key(|a| a.0.to_lowercase());
 
                                         egui::Grid::new(format!("machine:recipes_grid:{}", bname))
                                             .num_columns(2)
@@ -3997,7 +4005,7 @@ impl TemplateApp {
                         }
                         let mut items: Vec<(String, crate::fractional_number::FractionalNumber)> = map.into_iter().collect();
                         // Sort alphabetically (case-insensitive)
-                        items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+                        items.sort_by_key(|a| a.0.to_lowercase());
 
                         let rate_width = ui
                             .painter()

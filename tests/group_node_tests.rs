@@ -38,24 +38,22 @@ fn test_load_groups_test_file() {
     // The file should have at least one group (it has nested groups too)
     assert!(
         group_count >= 1,
-        "Expected at least 1 group node, found {}",
-        group_count
+        "Expected at least 1 group node, found {group_count}"
     );
 
-    println!(
-        "Successfully loaded {} nodes including {} group nodes",
-        app.nodes.len(),
-        group_count
+    log::debug!(
+        "Successfully loaded {} nodes including {group_count} group nodes",
+        app.nodes.len()
     );
 
     // Verify group nodes have proper structure
     for node in &app.nodes {
         if let Some(group) = node.downcast_ref::<GroupNode>() {
-            println!(
-                "Group '{}' contains {} grouped nodes and {} grouped links",
-                group.name,
-                group.grouped_nodes.len(),
-                group.grouped_links.len()
+            log::debug!(
+                "Group '{name}' contains {nodes} grouped nodes and {links} grouped links",
+                name = group.name,
+                nodes = group.grouped_nodes.len(),
+                links = group.grouped_links.len()
             );
 
             // A group should have at least one grouped node
@@ -84,13 +82,11 @@ fn test_group_and_ungroup_nodes() {
 
     // Create a craft node for Iron Ingot
     let result = app.add_craft_node("Iron Ingot", &game_data);
-    assert!(result.is_ok());
-    let iron_ingot_id = result.unwrap();
+    let iron_ingot_id = result.expect("Failed to add Iron Ingot craft node");
 
     // Create another craft node for Iron Plate
     let result = app.add_craft_node("Iron Plate", &game_data);
-    assert!(result.is_ok());
-    let iron_plate_id = result.unwrap();
+    let iron_plate_id = result.expect("Failed to add Iron Plate craft node");
 
     // We should have 2 nodes
     assert_eq!(app.nodes.len(), 2);
@@ -98,8 +94,7 @@ fn test_group_and_ungroup_nodes() {
     // Group the two nodes
     let node_ids = vec![iron_ingot_id, iron_plate_id];
     let result = app.group_nodes(&node_ids);
-    assert!(result.is_ok(), "Failed to group nodes: {:?}", result.err());
-    let group_id = result.unwrap();
+    let group_id = result.expect("Failed to group nodes");
 
     // Now we should have 1 node (the group)
     assert_eq!(app.nodes.len(), 1, "Expected 1 node after grouping");
@@ -109,8 +104,7 @@ fn test_group_and_ungroup_nodes() {
 
     // Ungroup
     let result = app.ungroup_node(group_id, Some(&game_data));
-    assert!(result.is_ok(), "Failed to ungroup: {:?}", result.err());
-    let restored_ids = result.unwrap();
+    let restored_ids = result.expect("Failed to ungroup");
 
     // Should have restored 2 nodes
     assert_eq!(restored_ids.len(), 2, "Expected 2 restored nodes");
@@ -118,5 +112,5 @@ fn test_group_and_ungroup_nodes() {
     // We should have 2 nodes again
     assert_eq!(app.nodes.len(), 2, "Expected 2 nodes after ungrouping");
 
-    println!("Group/ungroup test passed");
+    log::debug!("Group/ungroup test passed");
 }

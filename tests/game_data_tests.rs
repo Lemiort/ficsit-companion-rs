@@ -1,5 +1,6 @@
 use ficsit_companion_rs::game_data::GameData;
 
+#[expect(clippy::too_many_lines)]
 #[test]
 fn smoke_test_game_data_parser() {
     let json_data = r#"{
@@ -145,7 +146,10 @@ fn smoke_test_game_data_parser() {
     assert!(game_data.items().contains_key("Packaged Liquid Biofuel"));
     assert!(game_data.items().contains_key("Alien Power Matrix"));
 
-    let biofuel = game_data.items().get("Packaged Liquid Biofuel").unwrap();
+    let biofuel = game_data
+        .items()
+        .get("Packaged Liquid Biofuel")
+        .expect("Packaged Liquid Biofuel missing");
     assert_eq!(biofuel.name, "Packaged Liquid Biofuel");
     assert_eq!(biofuel.sink_value, 370);
 
@@ -156,10 +160,13 @@ fn smoke_test_game_data_parser() {
     assert!(game_data.buildings().contains_key("Constructor"));
     assert!(game_data.buildings().contains_key("Smelter"));
 
-    let coal_gen = game_data.buildings().get("Coal-Powered Generator").unwrap();
+    let coal_gen = game_data
+        .buildings()
+        .get("Coal-Powered Generator")
+        .expect("Coal-Powered Generator missing");
     assert_eq!(coal_gen.name, "Coal-Powered Generator");
     assert_eq!(coal_gen.power, -75.0);
-    assert_eq!(coal_gen.variable_power, false);
+    assert!(!coal_gen.variable_power);
 
     // Verify recipes were loaded
     assert_eq!(game_data.recipes().len(), 3, "Expected 3 recipes");
@@ -172,24 +179,66 @@ fn smoke_test_game_data_parser() {
 
     assert_eq!(iron_plate_recipe.name, "Iron Plate");
     assert_eq!(iron_plate_recipe.building_name, "Constructor");
-    assert_eq!(iron_plate_recipe.alternate, false);
+    assert!(!iron_plate_recipe.alternate);
     assert_eq!(iron_plate_recipe.ins.len(), 1);
     assert_eq!(iron_plate_recipe.outs.len(), 1);
     assert_eq!(
-        iron_plate_recipe.ins[0].item.as_ref().unwrap().name,
+        iron_plate_recipe
+            .ins
+            .first()
+            .and_then(|i| i.item.as_ref())
+            .expect("Iron Plate recipe input missing")
+            .name,
         "Iron Ingot"
     );
     assert_eq!(
-        iron_plate_recipe.outs[0].item.as_ref().unwrap().name,
+        iron_plate_recipe
+            .outs
+            .first()
+            .and_then(|i| i.item.as_ref())
+            .expect("Iron Plate recipe output missing")
+            .name,
         "Iron Plate"
     );
 
     // Quantities should be normalized to items per minute (60 / time)
     // Iron Plate: inputs 3 per 6s -> 30 per min; outputs 2 per 6s -> 20 per min
-    assert_eq!(iron_plate_recipe.ins[0].quantity.numerator(), 30);
-    assert_eq!(iron_plate_recipe.ins[0].quantity.denominator(), 1);
-    assert_eq!(iron_plate_recipe.outs[0].quantity.numerator(), 20);
-    assert_eq!(iron_plate_recipe.outs[0].quantity.denominator(), 1);
+    assert_eq!(
+        iron_plate_recipe
+            .ins
+            .first()
+            .expect("Iron Plate recipe input missing")
+            .quantity
+            .numerator(),
+        30
+    );
+    assert_eq!(
+        iron_plate_recipe
+            .ins
+            .first()
+            .expect("Iron Plate recipe input missing")
+            .quantity
+            .denominator(),
+        1
+    );
+    assert_eq!(
+        iron_plate_recipe
+            .outs
+            .first()
+            .expect("Iron Plate recipe output missing")
+            .quantity
+            .numerator(),
+        20
+    );
+    assert_eq!(
+        iron_plate_recipe
+            .outs
+            .first()
+            .expect("Iron Plate recipe output missing")
+            .quantity
+            .denominator(),
+        1
+    );
 
     // Iron Rod: 1 per 4s -> 15 per min
     let iron_rod_recipe = game_data
@@ -197,8 +246,24 @@ fn smoke_test_game_data_parser() {
         .iter()
         .find(|r| r.name == "Iron Rod")
         .expect("Iron Rod recipe not found");
-    assert_eq!(iron_rod_recipe.ins[0].quantity.numerator(), 15);
-    assert_eq!(iron_rod_recipe.outs[0].quantity.numerator(), 15);
+    assert_eq!(
+        iron_rod_recipe
+            .ins
+            .first()
+            .expect("Iron Rod recipe input missing")
+            .quantity
+            .numerator(),
+        15
+    );
+    assert_eq!(
+        iron_rod_recipe
+            .outs
+            .first()
+            .expect("Iron Rod recipe output missing")
+            .quantity
+            .numerator(),
+        15
+    );
 
     // Iron Ingot (Smelter): 1 per 2s -> 30 per min
     let iron_ingot_recipe = game_data
@@ -206,6 +271,22 @@ fn smoke_test_game_data_parser() {
         .iter()
         .find(|r| r.name == "Iron Ingot")
         .expect("Iron Ingot recipe not found");
-    assert_eq!(iron_ingot_recipe.ins[0].quantity.numerator(), 30);
-    assert_eq!(iron_ingot_recipe.outs[0].quantity.numerator(), 30);
+    assert_eq!(
+        iron_ingot_recipe
+            .ins
+            .first()
+            .expect("Iron Ingot recipe input missing")
+            .quantity
+            .numerator(),
+        30
+    );
+    assert_eq!(
+        iron_ingot_recipe
+            .outs
+            .first()
+            .expect("Iron Ingot recipe output missing")
+            .quantity
+            .numerator(),
+        30
+    );
 }

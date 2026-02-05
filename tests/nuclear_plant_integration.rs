@@ -11,6 +11,7 @@ fn load_game_data() -> GameData {
     game_data
 }
 
+#[expect(clippy::too_many_lines)]
 #[test]
 fn test_nuclear_plant_load_and_file_consistency() {
     let json = include_str!("../tests/nuclear_plant.fcs");
@@ -40,33 +41,39 @@ fn test_nuclear_plant_load_and_file_consistency() {
         if fnode.get("recipe").is_some() {
             let nid = app
                 .find_node_by_index(idx)
-                .expect(&format!("Craft node {} missing", idx));
-            let (rate_str, _building) = app.get_node_building_info(nid).expect(&format!(
-                "Failed to get building info for craft node {}",
-                idx
-            ));
+                .unwrap_or_else(|| panic!("Craft node {idx} missing"));
+            let (rate_str, _building) = app
+                .get_node_building_info(nid)
+                .unwrap_or_else(|| panic!("Failed to get building info for craft node {idx}"));
             // Extract rate from file
-            let num = fnode["rate"]["num"].as_i64().expect("Missing rate.num");
-            let den = fnode["rate"]["den"].as_i64().expect("Missing rate.den");
+            let num = fnode
+                .get("rate")
+                .and_then(|r| r.get("num"))
+                .and_then(|n| n.as_i64())
+                .expect("Missing rate.num");
+            let den = fnode
+                .get("rate")
+                .and_then(|r| r.get("den"))
+                .and_then(|d| d.as_i64())
+                .expect("Missing rate.den");
             let expected = if den == 1 {
                 num.to_string()
             } else {
-                format!("{}/{}", num, den)
+                format!("{num}/{den}")
             };
-            assert_eq!(rate_str, expected, "Craft node {} rate mismatch", idx);
+            assert_eq!(rate_str, expected, "Craft node {idx} rate mismatch");
 
             // If file marked the node locked, ensure pins are locked accordingly
-            if let Some(locked_val) = fnode.get("locked") {
-                if locked_val.as_bool().unwrap_or(false) {
-                    let (ins_locked, outs_locked) = app
-                        .get_node_pin_locked_flags(nid)
-                        .expect("Failed to get pin locked flags");
-                    assert!(
-                        ins_locked.iter().chain(outs_locked.iter()).all(|b| *b),
-                        "All pins of craft node {} should be locked",
-                        idx
-                    );
-                }
+            if let Some(locked_val) = fnode.get("locked")
+                && locked_val.as_bool().unwrap_or(false)
+            {
+                let (ins_locked, outs_locked) = app
+                    .get_node_pin_locked_flags(nid)
+                    .expect("Failed to get pin locked flags");
+                assert!(
+                    ins_locked.iter().chain(outs_locked.iter()).all(|b| *b),
+                    "All pins of craft node {idx} should be locked",
+                );
             }
         }
 
@@ -74,7 +81,7 @@ fn test_nuclear_plant_load_and_file_consistency() {
         if fnode.get("ins").is_some() || fnode.get("outs").is_some() {
             let nid = app
                 .find_node_by_index(idx)
-                .expect(&format!("Organizer node {} missing", idx));
+                .unwrap_or_else(|| panic!("Organizer node {idx} missing"));
             let (ins, outs) = app
                 .get_node_pin_rates(nid)
                 .expect("Failed to get organizer pin rates");
@@ -84,8 +91,7 @@ fn test_nuclear_plant_load_and_file_consistency() {
                 assert_eq!(
                     ins_array.len(),
                     ins.len(),
-                    "Organizer {} input count mismatch",
-                    idx
+                    "Organizer {idx} input count mismatch",
                 );
                 for (i, pin) in ins_array.iter().enumerate() {
                     let num = pin["num"].as_i64().expect("ins.num missing");
@@ -93,25 +99,23 @@ fn test_nuclear_plant_load_and_file_consistency() {
                     let expected = if den == 1 {
                         num.to_string()
                     } else {
-                        format!("{}/{}", num, den)
+                        format!("{num}/{den}")
                     };
                     assert_eq!(
-                        ins[i].as_ref().unwrap(),
+                        ins.get(i)
+                            .and_then(|o| o.as_ref())
+                            .expect("Organizer input missing"),
                         &expected,
-                        "Organizer {} input {} rate mismatch",
-                        idx,
-                        i
+                        "Organizer {idx} input {i} rate mismatch",
                     );
                     if let Some(lock_val) = pin.get("locked") {
                         let locked_flags = app
                             .get_node_pin_locked_flags(nid)
                             .expect("Failed to get pin locked flags");
                         assert_eq!(
-                            locked_flags.0[i],
+                            locked_flags.0.get(i).copied().unwrap_or(false),
                             lock_val.as_bool().unwrap_or(false),
-                            "Organizer {} input {} locked mismatch",
-                            idx,
-                            i
+                            "Organizer {idx} input {i} locked mismatch",
                         );
                     }
                 }
@@ -122,8 +126,7 @@ fn test_nuclear_plant_load_and_file_consistency() {
                 assert_eq!(
                     outs_array.len(),
                     outs.len(),
-                    "Organizer {} output count mismatch",
-                    idx
+                    "Organizer {idx} output count mismatch",
                 );
                 for (i, pin) in outs_array.iter().enumerate() {
                     let num = pin["num"].as_i64().expect("outs.num missing");
@@ -131,25 +134,23 @@ fn test_nuclear_plant_load_and_file_consistency() {
                     let expected = if den == 1 {
                         num.to_string()
                     } else {
-                        format!("{}/{}", num, den)
+                        format!("{num}/{den}")
                     };
                     assert_eq!(
-                        outs[i].as_ref().unwrap(),
+                        outs.get(i)
+                            .and_then(|o| o.as_ref())
+                            .expect("Organizer output missing"),
                         &expected,
-                        "Organizer {} output {} rate mismatch",
-                        idx,
-                        i
+                        "Organizer {idx} output {i} rate mismatch",
                     );
                     if let Some(lock_val) = pin.get("locked") {
                         let locked_flags = app
                             .get_node_pin_locked_flags(nid)
                             .expect("Failed to get pin locked flags");
                         assert_eq!(
-                            locked_flags.1[i],
+                            locked_flags.1.get(i).copied().unwrap_or(false),
                             lock_val.as_bool().unwrap_or(false),
-                            "Organizer {} output {} locked mismatch",
-                            idx,
-                            i
+                            "Organizer {idx} output {i} locked mismatch",
                         );
                     }
                 }
@@ -174,11 +175,14 @@ fn test_nuclear_plant_load_and_file_consistency() {
         1,
         "Expected exactly one merger in the file"
     );
-    let merger_idx = merger_indices[0];
+    let merger_idx = *merger_indices
+        .first()
+        .expect("Expected exactly one merger index");
 
     // Check file's declared item
-    let merger_file_item = file_nodes[merger_idx]
-        .get("item")
+    let merger_file_item = file_nodes
+        .get(merger_idx)
+        .and_then(|n| n.get("item"))
         .and_then(|v| v.as_str())
         .expect("Merger item missing in file");
     assert_eq!(
@@ -195,45 +199,62 @@ fn test_nuclear_plant_load_and_file_consistency() {
         .expect("Merger node item missing in app");
     assert_eq!(merger_item, "Sulfuric Acid", "Merger node item mismatch");
 
+    // Power-generator sanity checks are in a separate test below
+    // to keep the function size reasonable.
+}
+
+#[test]
+fn test_nuclear_plant_power_generators() {
+    let json = include_str!("../tests/nuclear_plant.fcs");
+    let game_data = load_game_data();
+
+    let mut app = ProductionApp::new();
+    app.load_from_json(json, Some(&game_data))
+        .expect("Failed to load nuclear_plant.fcs");
+
+    // Parse raw JSON to drive assertions
+    let parsed: Value = serde_json::from_str(json).expect("Failed to parse nuclear_plant.fcs JSON");
+    let file_nodes = parsed
+        .get("nodes")
+        .and_then(|n| n.as_array())
+        .expect("nodes array missing in file");
+
     // Sanity check: ensure power-generating craft nodes have negative power and non-zero totals
     let mut found_power_gen = false;
     for (idx, fnode) in file_nodes.iter().enumerate() {
-        if let Some(recipe_name) = fnode.get("recipe").and_then(|r| r.as_str()) {
-            if recipe_name.starts_with("Power (") {
-                let nid = app
-                    .find_node_by_index(idx)
-                    .expect(&format!("Power craft node {} missing", idx));
-                // Node should be marked as power generator
+        if let Some(recipe_name) = fnode.get("recipe").and_then(|r| r.as_str())
+            && recipe_name.starts_with("Power (")
+        {
+            let nid = app
+                .find_node_by_index(idx)
+                .unwrap_or_else(|| panic!("Power craft node {idx} missing"));
+            // Node should be marked as power generator
+            assert!(
+                app.get_node_is_power_generator(nid),
+                "Node {idx} should be a power generator",
+            );
+            if let Some((same_str, last_str, _variable)) = app.get_node_power_info(nid) {
+                // Parse as FractionalNumber and ensure non-zero (and likely negative)
+                let same = match ficsit_companion_rs::FractionalNumber::from_string(&same_str) {
+                    Ok(v) => v,
+                    Err(e) => panic!("Failed parsing same power '{same_str}': {e}"),
+                };
+                let last = match ficsit_companion_rs::FractionalNumber::from_string(&last_str) {
+                    Ok(v) => v,
+                    Err(e) => panic!("Failed parsing last power '{last_str}': {e}"),
+                };
                 assert!(
-                    app.get_node_is_power_generator(nid),
-                    "Node {} should be a power generator",
-                    idx
+                    same.value() != 0.0 || last.value() != 0.0,
+                    "Power generator node {idx} reports zero power",
                 );
-                if let Some((same_str, last_str, _variable)) = app.get_node_power_info(nid) {
-                    // Parse as FractionalNumber and ensure non-zero (and likely negative)
-                    let same = match ficsit_companion_rs::FractionalNumber::from_string(&same_str) {
-                        Ok(v) => v,
-                        Err(e) => panic!("Failed parsing same power '{}': {}", same_str, e),
-                    };
-                    let last = match ficsit_companion_rs::FractionalNumber::from_string(&last_str) {
-                        Ok(v) => v,
-                        Err(e) => panic!("Failed parsing last power '{}': {}", last_str, e),
-                    };
-                    assert!(
-                        same.value() != 0.0 || last.value() != 0.0,
-                        "Power generator node {} reports zero power",
-                        idx
-                    );
-                    // At least one should be negative (generation)
-                    assert!(
-                        same.value() < 0.0 || last.value() < 0.0,
-                        "Power generator node {} should have negative power",
-                        idx
-                    );
-                    found_power_gen = true;
-                } else {
-                    panic!("No power info for node {}", idx);
-                }
+                // At least one should be negative (generation)
+                assert!(
+                    same.value() < 0.0 || last.value() < 0.0,
+                    "Power generator node {idx} should have negative power",
+                );
+                found_power_gen = true;
+            } else {
+                panic!("No power info for node {idx}");
             }
         }
     }

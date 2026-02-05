@@ -108,9 +108,8 @@ fn test_positions_preserved_on_save_reload() {
     // Mutate positions to known values per index
     for i in 0..app.node_count() {
         let new_pos = (i as f32 * 10.0 + 1.0, i as f32 * 20.0 + 2.0);
-        let node_id = match app.find_node_by_index(i) {
-            Some(id) => id,
-            None => continue,
+        let Some(node_id) = app.find_node_by_index(i) else {
+            continue;
         };
         app.set_node_position(node_id, new_pos)
             .expect("set position failed");
@@ -125,11 +124,7 @@ fn test_positions_preserved_on_save_reload() {
     for i in 0..app.node_count() {
         let p1 = app.get_node_position(i).expect("pos missing");
         let p2 = app2.get_node_position(i).expect("pos missing after reload");
-        assert_eq!(
-            p1, p2,
-            "Position mismatch at index {}: {:?} vs {:?}",
-            i, p1, p2
-        );
+        assert_eq!(p1, p2, "Position mismatch at index {i}: {p1:?} vs {p2:?}");
     }
 }
 
@@ -140,19 +135,18 @@ fn test_iron_ingot_node_rate() {
     let game_data = load_game_data();
 
     let mut app = ProductionApp::new();
-    app.load_from_json(&json, Some(&game_data))
+    app.load_from_json(json, Some(&game_data))
         .expect("Failed to load production_chain copy.fcs");
 
     // Find node id for the "Iron Ingot" craft node
     let mut iron_node_id = None;
     for i in 0..app.node_count() {
-        if let Some(node_id) = app.find_node_by_index(i) {
-            if let Some(label) = app.get_node_label(node_id) {
-                if label == "Iron Ingot" {
-                    iron_node_id = Some(node_id);
-                    break;
-                }
-            }
+        if let Some(node_id) = app.find_node_by_index(i)
+            && let Some(label) = app.get_node_label(node_id)
+            && label == "Iron Ingot"
+        {
+            iron_node_id = Some(node_id);
+            break;
         }
     }
 
@@ -178,7 +172,7 @@ fn test_pin_rates_preserved_on_save_reload() {
         .expect("Failed to create craft node");
 
     // Ensure at least one output pin is present
-    let out_pin_id = app
+    let _out_pin_id = app
         .get_pin_id(node_id, PinDirection::Output, 0)
         .expect("Failed to get craft output pin");
 
@@ -195,11 +189,13 @@ fn test_pin_rates_preserved_on_save_reload() {
     let (_ins, outs) = app
         .get_node_pin_rates(node_id)
         .expect("Failed to get pin rates");
-    let before = outs[0].as_ref().expect("Output rate should be Some");
+    let before = outs
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Output rate should be Some");
     assert!(
         before == "10" || before == "10/1",
-        "Unexpected rate before save: {}",
-        before
+        "Unexpected rate before save: {before}"
     );
 
     // Save and reload
@@ -211,13 +207,12 @@ fn test_pin_rates_preserved_on_save_reload() {
     // Find the same craft node by label in reloaded app
     let mut reloaded_node_id = None;
     for i in 0..app2.node_count() {
-        if let Some(node_id) = app2.find_node_by_index(i) {
-            if let Some(label) = app2.get_node_label(node_id) {
-                if label == "Encased Uranium Cell" {
-                    reloaded_node_id = Some(node_id);
-                    break;
-                }
-            }
+        if let Some(node_id) = app2.find_node_by_index(i)
+            && let Some(label) = app2.get_node_label(node_id)
+            && label == "Encased Uranium Cell"
+        {
+            reloaded_node_id = Some(node_id);
+            break;
         }
     }
     let rnode = reloaded_node_id.expect("Reloaded craft node not found");
@@ -226,13 +221,13 @@ fn test_pin_rates_preserved_on_save_reload() {
     let (_rins, routs) = app2
         .get_node_pin_rates(rnode)
         .expect("Failed to get pin rates after reload");
-    let after = routs[0]
-        .as_ref()
+    let after = routs
+        .first()
+        .and_then(|o| o.as_ref())
         .expect("Output rate should be Some after reload");
     assert!(
         after == "10" || after == "10/1",
-        "Rate not preserved after reload: {}",
-        after
+        "Rate not preserved after reload: {after}"
     );
 }
 
@@ -256,9 +251,21 @@ fn test_merger_splitter_import_compatibility() {
     assert_eq!(outs.len(), 1, "Merger should have 1 output");
 
     // Rates should match saved values (10, 30 -> out 40)
-    assert_eq!(ins[0].as_ref().unwrap(), "10");
-    assert_eq!(ins[1].as_ref().unwrap(), "30");
-    assert_eq!(outs[0].as_ref().unwrap(), "40");
+    let ins0 = ins
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Merger input 0 missing");
+    let ins1 = ins
+        .get(1)
+        .and_then(|o| o.as_ref())
+        .expect("Merger input 1 missing");
+    let out0 = outs
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Merger output 0 missing");
+    assert_eq!(ins0, "10");
+    assert_eq!(ins1, "30");
+    assert_eq!(out0, "40");
 
     // Node index 10 is a CustomSplitter (kind=1) with 1 input, 3 outputs
     let splitter_node_id = app.find_node_by_index(10).expect("Splitter node missing");
@@ -269,9 +276,21 @@ fn test_merger_splitter_import_compatibility() {
     assert_eq!(s_outs.len(), 3, "Splitter should have 3 outputs");
 
     // Output rates should match saved values (15, 36, 0)
-    assert_eq!(s_outs[0].as_ref().unwrap(), "15");
-    assert_eq!(s_outs[1].as_ref().unwrap(), "36");
-    assert_eq!(s_outs[2].as_ref().unwrap(), "0");
+    let s0 = s_outs
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Splitter out0 missing");
+    let s1 = s_outs
+        .get(1)
+        .and_then(|o| o.as_ref())
+        .expect("Splitter out1 missing");
+    let s2 = s_outs
+        .get(2)
+        .and_then(|o| o.as_ref())
+        .expect("Splitter out2 missing");
+    assert_eq!(s0, "15");
+    assert_eq!(s1, "36");
+    assert_eq!(s2, "0");
 }
 
 #[test]
@@ -308,18 +327,28 @@ fn test_organizer_ins_outs_saved() {
     assert!(org.ins.is_some(), "Expected ins to be emitted");
     assert!(org.outs.is_some(), "Expected outs to be emitted");
 
-    let ins = org.ins.as_ref().unwrap();
-    let outs = org.outs.as_ref().unwrap();
+    let ins = org.ins.as_ref().expect("Expected ins to be emitted");
+    let outs = org.outs.as_ref().expect("Expected outs to be emitted");
     assert_eq!(ins.len(), 2, "Expected 2 input entries");
     assert_eq!(outs.len(), 1, "Expected 1 output entry");
 
     // First input should have item "Iron Ore" and be locked
-    assert_eq!(ins[0].item.as_ref().unwrap(), "Iron Ore");
-    assert!(ins[0].locked, "First input should be locked");
+    let ins0_item = ins
+        .first()
+        .and_then(|p| p.item.as_ref())
+        .expect("ins[0] item missing");
+    let ins0_locked = ins.first().map(|p| p.locked).expect("ins[0] missing");
+    assert_eq!(ins0_item, "Iron Ore");
+    assert!(ins0_locked, "First input should be locked");
 
     // Outputs should have item name set but not locked
-    assert_eq!(outs[0].item.as_ref().unwrap(), "Iron Ore");
-    assert!(!outs[0].locked, "Output should not be locked");
+    let out0_item = outs
+        .first()
+        .and_then(|p| p.item.as_ref())
+        .expect("outs[0] item missing");
+    let out0_locked = outs.first().map(|p| p.locked).expect("outs[0] missing");
+    assert_eq!(out0_item, "Iron Ore");
+    assert!(!out0_locked, "Output should not be locked");
 }
 
 #[test]
@@ -339,9 +368,11 @@ fn test_organizer_item_propagates_to_pins_on_load() {
 
     // After load, organizer should have default pins and item propagated to pin names
     let node_index = 0;
-    let node_id = app.nodes[node_index]
-        .downcast_ref::<node::OrganizerNode>()
-        .unwrap()
+    let node_id = app
+        .nodes
+        .get(node_index)
+        .and_then(|b| b.downcast_ref::<node::OrganizerNode>())
+        .expect("Organizer node missing")
         .base
         .id;
     let (ins, outs) = app
@@ -372,8 +403,14 @@ fn test_lock_sink_input_pin() {
         .get_node_pin_locked_flags(sink_id)
         .expect("Failed to get locked flags for sink");
     assert_eq!(ins_locked.len(), 2);
-    assert!(!ins_locked[0], "Sink input 0 should initially be unlocked");
-    assert!(!ins_locked[1], "Sink input 1 should initially be unlocked");
+    assert!(
+        !ins_locked.first().copied().unwrap_or(false),
+        "Sink input 0 should initially be unlocked"
+    );
+    assert!(
+        !ins_locked.get(1).copied().unwrap_or(false),
+        "Sink input 1 should initially be unlocked"
+    );
 
     // Lock the first sink input pin (simulate UI pin lock)
     let pin0_id = app
@@ -387,15 +424,16 @@ fn test_lock_sink_input_pin() {
         .expect("Failed to get locked flags for sink after lock");
     // First pin should be locked, second should remain unlocked
     assert!(
-        ins_locked_after[0],
+        ins_locked_after.first().copied().unwrap_or(false),
         "Sink input 0 should be locked after set_pin_locked"
     );
     assert!(
-        !ins_locked_after[1],
+        !ins_locked_after.get(1).copied().unwrap_or(false),
         "Sink input 1 should remain unlocked when locking pin 0"
     );
 }
 
+#[test]
 fn test_power_generator_detection() {
     let game_data = load_game_data();
     let mut app = ProductionApp::new();
@@ -512,7 +550,7 @@ fn test_connect_locked_craft_to_merger() {
     );
 
     // Check that the link was created (even if there was a propagation warning)
-    let (link_id, _warning) = result.unwrap();
+    let (link_id, _warning) = result.expect("create_link failed");
     assert!(link_id > 0, "Link ID should be positive");
 
     // Verify merger input now has rate=10
@@ -524,11 +562,13 @@ fn test_connect_locked_craft_to_merger() {
     assert_eq!(merger_ins.len(), 2, "Merger should have 2 input pins");
 
     // Check rate of connected input
-    let rate_str = merger_ins[1].as_ref().expect("Input 1 rate should be Some");
+    let rate_str = merger_ins
+        .get(1)
+        .and_then(|o| o.as_ref())
+        .expect("Merger input 1 missing");
     assert!(
         rate_str == "10" || rate_str == "10/1",
-        "Merger input 1 should have rate 10, got: {}",
-        rate_str
+        "Merger input 1 should have rate 10, got: {rate_str}",
     );
 
     // IMPORTANT: Merger's connected pin should also be locked since it's determined by locked source
@@ -538,15 +578,15 @@ fn test_connect_locked_craft_to_merger() {
 
     // Only the connected input (index 1) should be locked, not the whole node
     assert!(
-        !merger_ins_locked[0],
+        !merger_ins_locked.first().copied().unwrap_or(false),
         "Merger input 0 (unconnected) should NOT be locked"
     );
     assert!(
-        merger_ins_locked[1],
+        merger_ins_locked.get(1).copied().unwrap_or(false),
         "Merger input 1 (connected to locked craft) should be locked"
     );
     assert!(
-        !merger_outs_locked[0],
+        !merger_outs_locked.first().copied().unwrap_or(false),
         "Merger output 0 (unconnected) should NOT be locked"
     );
 }
@@ -561,6 +601,7 @@ fn test_connect_locked_craft_to_merger() {
 ///
 /// The merger should compute: output = 40 (craft input rate)
 /// Since one input is 10, the other input should be 30 (or remain 0 if unconnected and rate propagates)
+#[expect(clippy::too_many_lines)]
 #[test]
 fn test_connect_locked_craft_merger_loop() {
     let game_data = load_game_data();
@@ -605,32 +646,39 @@ fn test_connect_locked_craft_merger_loop() {
     );
 
     // Debug after first link
-    let (m_ins1, m_outs1) = app.get_node_pin_rates(merger_id).unwrap();
-    let (m_ins_locked1, m_outs_locked1) = app.get_node_pin_locked_flags(merger_id).unwrap();
-    println!("After first link:");
-    println!("  merger ins: {:?}, locked: {:?}", m_ins1, m_ins_locked1);
-    println!("  merger outs: {:?}, locked: {:?}", m_outs1, m_outs_locked1);
+    let (m_ins1, m_outs1) = app
+        .get_node_pin_rates(merger_id)
+        .expect("Failed to get merger pin rates");
+    let (m_ins_locked1, m_outs_locked1) = app
+        .get_node_pin_locked_flags(merger_id)
+        .expect("Failed to get merger locked flags");
+    log::debug!("After first link:");
+    log::debug!("  merger ins: {m_ins1:?}, locked: {m_ins_locked1:?}");
+    log::debug!("  merger outs: {m_outs1:?}, locked: {m_outs_locked1:?}");
 
     // Second connection: merger output -> craft input (creates a loop)
     let result2 = app.create_link(merger_out_pin, craft_in_pin);
-    if let Err(ref e) = result2 {
-        println!("Second link error: {:?}", e);
+    if let Err(e) = &result2 {
+        log::debug!("Second link error: {e:?}");
     }
-    if let Ok((_, ref warn)) = result2 {
-        println!("Second link warning: {:?}", warn);
+    if let Ok((_, warn)) = &result2 {
+        log::debug!("Second link warning: {warn:?}");
     }
     assert!(
         result2.is_ok(),
-        "Second create_link (loop) should succeed, got error: {:?}",
-        result2.err()
+        "Second create_link (loop) should succeed, got error: {result2:?}",
     );
 
     // Debug after second link
-    let (m_ins2, m_outs2) = app.get_node_pin_rates(merger_id).unwrap();
-    let (m_ins_locked2, m_outs_locked2) = app.get_node_pin_locked_flags(merger_id).unwrap();
-    println!("After second link:");
-    println!("  merger ins: {:?}, locked: {:?}", m_ins2, m_ins_locked2);
-    println!("  merger outs: {:?}, locked: {:?}", m_outs2, m_outs_locked2);
+    let (m_ins2, m_outs2) = app
+        .get_node_pin_rates(merger_id)
+        .expect("Failed to get merger pin rates");
+    let (m_ins_locked2, m_outs_locked2) = app
+        .get_node_pin_locked_flags(merger_id)
+        .expect("Failed to get merger locked flags");
+    log::debug!("After second link:");
+    log::debug!("  merger ins: {m_ins2:?}, locked: {m_ins_locked2:?}");
+    log::debug!("  merger outs: {m_outs2:?}, locked: {m_outs_locked2:?}");
 
     // Verify rates after both connections
     let (merger_ins, merger_outs) = app
@@ -638,19 +686,23 @@ fn test_connect_locked_craft_merger_loop() {
         .expect("Failed to get merger pin rates");
 
     // Merger output should be 40 (matches craft input)
-    let out_rate_str = merger_outs[0].as_ref().expect("Output rate should be Some");
+    let out_rate_str = merger_outs
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Merger output missing");
     assert!(
         out_rate_str == "40" || out_rate_str == "40/1",
-        "Merger output should have rate 40 (matching craft input), got: {}",
-        out_rate_str
+        "Merger output should have rate 40 (matching craft input), got: {out_rate_str}",
     );
 
     // Connected merger input should be 10 (from craft output)
-    let in1_rate_str = merger_ins[1].as_ref().expect("Input 1 rate should be Some");
+    let in1_rate_str = merger_ins
+        .get(1)
+        .and_then(|o| o.as_ref())
+        .expect("Merger input 1 missing");
     assert!(
         in1_rate_str == "10" || in1_rate_str == "10/1",
-        "Merger input 1 should have rate 10, got: {}",
-        in1_rate_str
+        "Merger input 1 should have rate 10, got: {in1_rate_str}",
     );
 
     // IMPORTANT: ALL merger pins should be locked since the solution is uniquely determined
@@ -660,27 +712,41 @@ fn test_connect_locked_craft_merger_loop() {
         .expect("Failed to get merger locked flags");
 
     // Connected input (index 1) should be locked
+    let locked_in1 = merger_ins_locked
+        .get(1)
+        .copied()
+        .expect("Merger input 1 locked flag missing");
     assert!(
-        merger_ins_locked[1],
-        "Merger input 1 (connected to locked craft output) should be locked"
+        locked_in1,
+        "Merger input 1 (connected to locked craft output) should be locked",
     );
     // Connected output (index 0) should be locked
+    let locked_out0 = merger_outs_locked
+        .first()
+        .copied()
+        .expect("Merger output 0 locked flag missing");
     assert!(
-        merger_outs_locked[0],
-        "Merger output 0 (connected to locked craft input) should be locked"
+        locked_out0,
+        "Merger output 0 (connected to locked craft input) should be locked",
     );
     // Unconnected input should ALSO be locked since its value is uniquely determined (40 - 10 = 30)
+    let locked_in0 = merger_ins_locked
+        .first()
+        .copied()
+        .expect("Merger input 0 locked flag missing");
     assert!(
-        merger_ins_locked[0],
-        "Merger input 0 should be auto-locked since solution is unique"
+        locked_in0,
+        "Merger input 0 should be auto-locked since solution is unique",
     );
 
     // Verify the unconnected input has the correct rate (30)
-    let in0_rate_str = merger_ins[0].as_ref().expect("Input 0 rate should be Some");
+    let in0_rate_str = merger_ins
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Merger input 0 missing");
     assert!(
         in0_rate_str == "30" || in0_rate_str == "30/1",
-        "Merger input 0 should have rate 30 (40 - 10), got: {}",
-        in0_rate_str
+        "Merger input 0 should have rate 30 (40 - 10), got: {in0_rate_str}",
     );
 }
 
@@ -706,23 +772,26 @@ fn test_connect_craft_output_to_merger_input() {
     .expect("Failed to set craft rate");
 
     // Verify craft output is 20
-    let (_c_ins, c_outs) = app.get_node_pin_rates(craft_id).unwrap();
-    let craft_out_rate = c_outs[0].as_ref().unwrap();
+    let (_c_ins, c_outs) = app
+        .get_node_pin_rates(craft_id)
+        .expect("get_node_pin_rates failed");
+    let craft_out_rate = c_outs
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Craft output missing");
     assert!(
         craft_out_rate == "20" || craft_out_rate == "20/1",
-        "Craft output should be 20, got: {}",
-        craft_out_rate
+        "Craft output should be 20, got: {craft_out_rate}",
     );
 
     // Create a merger node
     let merger_id = app.add_merger_node();
 
     // Check merger initial state
-    let (m_ins_before, m_outs_before) = app.get_node_pin_rates(merger_id).unwrap();
-    println!(
-        "Merger before link: ins={:?}, outs={:?}",
-        m_ins_before, m_outs_before
-    );
+    let (m_ins_before, m_outs_before) = app
+        .get_node_pin_rates(merger_id)
+        .expect("get_node_pin_rates failed");
+    log::debug!("Merger before link: ins={m_ins_before:?}, outs={m_outs_before:?}");
 
     // Connect craft output -> merger input 0
     let craft_out_pin = app
@@ -733,47 +802,46 @@ fn test_connect_craft_output_to_merger_input() {
         .expect("Failed to get merger input pin");
 
     let result = app.create_link(craft_out_pin, merger_in_pin);
-    if let Err(ref e) = result {
-        println!("Link creation error: {:?}", e);
+    if let Err(e) = &result {
+        log::debug!("Link creation error: {e:?}");
     }
     assert!(
         result.is_ok(),
-        "create_link should succeed, got error: {:?}",
+        "create_link should succeed, got error: {:#?}",
         result.err()
     );
 
     // After connection, the merger input should have rate=20 (from craft)
-    let (m_ins_after, m_outs_after) = app.get_node_pin_rates(merger_id).unwrap();
-    println!(
-        "Merger after link: ins={:?}, outs={:?}",
-        m_ins_after, m_outs_after
-    );
+    let (m_ins_after, m_outs_after) = app
+        .get_node_pin_rates(merger_id)
+        .expect("get_node_pin_rates failed");
+    log::debug!("Merger after link: ins={m_ins_after:?}, outs={m_outs_after:?}");
 
     // Connected input (index 0) should have rate 20
-    let in0_rate = m_ins_after[0]
-        .as_ref()
+    let in0_rate = m_ins_after
+        .first()
+        .and_then(|o| o.as_ref())
         .expect("Input 0 rate should be Some");
     assert!(
         in0_rate == "20" || in0_rate == "20/1",
-        "Merger input 0 should have rate 20 (from craft), got: {}",
-        in0_rate
+        "Merger input 0 should have rate 20 (from craft), got: {in0_rate}"
     );
 
     // Merger output should be 20 (sum of inputs: 20 + 0 = 20)
-    let out_rate = m_outs_after[0]
-        .as_ref()
+    let out_rate = m_outs_after
+        .first()
+        .and_then(|o| o.as_ref())
         .expect("Output rate should be Some");
     assert!(
         out_rate == "20" || out_rate == "20/1",
-        "Merger output should be 20, got: {}",
-        out_rate
+        "Merger output should be 20, got: {out_rate}"
     );
 }
 
 /// Test that when all merger inputs are connected and one changes,
 /// other inputs keep their values and the output adjusts.
 #[test]
-fn test_merger_inputs_independent_output_adjusts() {
+fn test_merger_inputs_independent_output_initial_state() {
     let game_data = load_game_data();
     let mut app = ProductionApp::new();
 
@@ -805,53 +873,127 @@ fn test_merger_inputs_independent_output_adjusts() {
     let merger_id = app.add_merger_node();
 
     // Connect craft1 output -> merger input 0
-    let c1_out = app.get_pin_id(craft1_id, PinDirection::Output, 0).unwrap();
-    let m_in0 = app.get_pin_id(merger_id, PinDirection::Input, 0).unwrap();
+    let c1_out = app
+        .get_pin_id(craft1_id, PinDirection::Output, 0)
+        .expect("pin id not found for craft1 output");
+    let m_in0 = app
+        .get_pin_id(merger_id, PinDirection::Input, 0)
+        .expect("pin id not found for merger input 0");
     app.create_link(c1_out, m_in0).expect("First link failed");
 
     // Connect craft2 output -> merger input 1
-    let c2_out = app.get_pin_id(craft2_id, PinDirection::Output, 0).unwrap();
-    let m_in1 = app.get_pin_id(merger_id, PinDirection::Input, 1).unwrap();
+    let c2_out = app
+        .get_pin_id(craft2_id, PinDirection::Output, 0)
+        .expect("pin id not found for craft2 output");
+    let m_in1 = app
+        .get_pin_id(merger_id, PinDirection::Input, 1)
+        .expect("pin id not found for merger input 1");
 
-    println!(
-        "Before second link: craft2 out rate = {:?}",
-        app.get_node_pin_rates(craft2_id).unwrap().1[0]
-    );
+    let craft2_out_display = app
+        .get_node_pin_rates(craft2_id)
+        .expect("get_node_pin_rates failed")
+        .1
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("craft2 output missing")
+        .clone();
+    log::debug!("Before second link: craft2 out rate = {craft2_out_display}");
 
     let result2 = app.create_link(c2_out, m_in1);
-    if let Err(ref e) = result2 {
-        println!("Second link error: {:?}", e);
+    if let Err(e) = &result2 {
+        log::debug!("Second link error: {e:?}");
     }
-    if let Ok((_id, ref warn)) = result2 {
-        println!("Second link warning: {:?}", warn);
+    if let Ok((_id, warn)) = &result2 {
+        log::debug!("Second link warning: {warn:?}");
     }
     result2.expect("Second link failed");
 
     // Check merger state: inputs=[10, 30], output=40
-    let (m_ins, m_outs) = app.get_node_pin_rates(merger_id).unwrap();
-    println!(
-        "Merger after both links: ins={:?}, outs={:?}",
-        m_ins, m_outs
-    );
+    let (m_ins, m_outs) = app
+        .get_node_pin_rates(merger_id)
+        .expect("get_node_pin_rates failed");
+    log::debug!("Merger after both links: ins={m_ins:?}, outs={m_outs:?}");
 
-    let in0 = m_ins[0].as_ref().unwrap();
-    let in1 = m_ins[1].as_ref().unwrap();
-    let out = m_outs[0].as_ref().unwrap();
+    let in0 = m_ins
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("merger input 0 missing");
+    let in1 = m_ins
+        .get(1)
+        .and_then(|o| o.as_ref())
+        .expect("merger input 1 missing");
+    let out = m_outs
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("merger output missing");
     assert!(
         in0 == "10" || in0 == "10/1",
-        "Input 0 should be 10, got: {}",
-        in0
+        "Input 0 should be 10, got: {in0}",
     );
     assert!(
         in1 == "30" || in1 == "30/1",
-        "Input 1 should be 30, got: {}",
-        in1
+        "Input 1 should be 30, got: {in1}",
     );
     assert!(
         out == "40" || out == "40/1",
-        "Output should be 40 (10+30), got: {}",
-        out
+        "Output should be 40 (10+30), got: {out}",
     );
+}
+
+#[test]
+fn test_merger_inputs_independent_output_changes() {
+    let game_data = load_game_data();
+    let mut app = ProductionApp::new();
+
+    // Create two craft nodes
+    let craft1_id = app
+        .add_craft_node("Iron Ingot", &game_data)
+        .expect("Failed to add craft1");
+    let craft2_id = app
+        .add_craft_node("Iron Ingot", &game_data)
+        .expect("Failed to add craft2");
+
+    // Set craft1 rate to 10, craft2 rate to 30
+    app.set_pin_rate(
+        craft1_id,
+        PinDirection::Output,
+        0,
+        FractionalNumber::new(10, 1),
+    )
+    .expect("Failed to set craft1 rate");
+    app.set_pin_rate(
+        craft2_id,
+        PinDirection::Output,
+        0,
+        FractionalNumber::new(30, 1),
+    )
+    .expect("Failed to set craft2 rate");
+
+    // Create a merger node
+    let merger_id = app.add_merger_node();
+
+    // Connect craft1 output -> merger input 0
+    let c1_out = app
+        .get_pin_id(craft1_id, PinDirection::Output, 0)
+        .expect("pin id not found for craft1 output");
+    let m_in0 = app
+        .get_pin_id(merger_id, PinDirection::Input, 0)
+        .expect("pin id not found for merger input 0");
+    app.create_link(c1_out, m_in0).expect("First link failed");
+
+    // Connect craft2 output -> merger input 1
+    let c2_out = app
+        .get_pin_id(craft2_id, PinDirection::Output, 0)
+        .expect("pin id not found for craft2 output");
+    let m_in1 = app
+        .get_pin_id(merger_id, PinDirection::Input, 1)
+        .expect("pin id not found for merger input 1");
+
+    let result2 = app.create_link(c2_out, m_in1);
+    if let Err(e) = &result2 {
+        log::debug!("Second link error: {e:?}");
+    }
+    result2.expect("Second link failed");
 
     // Now change craft1's rate to 50
     app.set_pin_rate(
@@ -864,38 +1006,48 @@ fn test_merger_inputs_independent_output_adjusts() {
 
     // Check merger state: inputs=[50, 30], output=80
     // IMPORTANT: craft2's rate should remain 30, not change
-    let (m_ins2, m_outs2) = app.get_node_pin_rates(merger_id).unwrap();
-    let (c2_ins, c2_outs) = app.get_node_pin_rates(craft2_id).unwrap();
-    println!(
-        "After craft1 change: merger ins={:?}, outs={:?}, craft2 outs={:?}",
-        m_ins2, m_outs2, c2_outs
+    let (m_ins2, m_outs2) = app
+        .get_node_pin_rates(merger_id)
+        .expect("get_node_pin_rates failed");
+    let (_c2_ins, c2_outs) = app
+        .get_node_pin_rates(craft2_id)
+        .expect("get_node_pin_rates failed");
+    log::debug!(
+        "After craft1 change: merger ins={m_ins2:?}, outs={m_outs2:?}, craft2 outs={c2_outs:?}"
     );
 
-    let in0_after = m_ins2[0].as_ref().unwrap();
-    let in1_after = m_ins2[1].as_ref().unwrap();
-    let out_after = m_outs2[0].as_ref().unwrap();
-    let c2_out_rate = c2_outs[0].as_ref().unwrap();
+    let in0_after = m_ins2
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("merger input 0 missing");
+    let in1_after = m_ins2
+        .get(1)
+        .and_then(|o| o.as_ref())
+        .expect("merger input 1 missing");
+    let out_after = m_outs2
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("merger output missing");
+    let c2_out_rate = c2_outs
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("craft2 output missing");
 
     assert!(
         in0_after == "50" || in0_after == "50/1",
-        "Input 0 should be 50, got: {}",
-        in0_after
-    );
-    // Craft2 and merger input 1 should remain 30, NOT reset to 0
+        "Input 0 should be 50, got: {in0_after}",
+    ); // Craft2 and merger input 1 should remain 30, NOT reset to 0
     assert!(
         in1_after == "30" || in1_after == "30/1",
-        "Input 1 should remain 30 (unchanged), got: {}",
-        in1_after
+        "Input 1 should remain 30 (unchanged), got: {in1_after}"
     );
     assert!(
         c2_out_rate == "30" || c2_out_rate == "30/1",
-        "Craft2 output should remain 30, got: {}",
-        c2_out_rate
+        "Craft2 output should remain 30, got: {c2_out_rate}"
     );
     assert!(
         out_after == "80" || out_after == "80/1",
-        "Output should be 80 (50+30), got: {}",
-        out_after
+        "Output should be 80 (50+30), got: {out_after}"
     );
 }
 
@@ -910,7 +1062,9 @@ fn test_connect_merger_output_to_new_craft_input() {
     let merger_id = app.add_merger_node();
 
     // Set merger input 0 to have rate 20 (simulating a connected source)
-    let m_in0 = app.get_pin_id(merger_id, PinDirection::Input, 0).unwrap();
+    let _m_in0 = app
+        .get_pin_id(merger_id, PinDirection::Input, 0)
+        .expect("Failed to get merger input pin");
     app.set_pin_rate(
         merger_id,
         PinDirection::Input,
@@ -920,15 +1074,19 @@ fn test_connect_merger_output_to_new_craft_input() {
     .expect("Failed to set merger input rate");
 
     // Check merger state: input 0 = 20, output should be 20
-    let (m_ins, m_outs) = app.get_node_pin_rates(merger_id).unwrap();
-    println!("Merger before link: ins={:?}, outs={:?}", m_ins, m_outs);
+    let (m_ins, m_outs) = app
+        .get_node_pin_rates(merger_id)
+        .expect("Failed to get merger pin rates");
+    log::debug!("Merger before link: ins={m_ins:?}, outs={m_outs:?}");
 
     // Verify merger output is 20
-    let m_out_rate = m_outs[0].as_ref().unwrap();
+    let m_out_rate = m_outs
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Merger output missing");
     assert!(
         m_out_rate == "20" || m_out_rate == "20/1",
-        "Merger output should be 20, got: {}",
-        m_out_rate
+        "Merger output should be 20, got: {m_out_rate}"
     );
 
     // Create a new craft node (simulating what UI does when you drop wire to create node)
@@ -937,47 +1095,51 @@ fn test_connect_merger_output_to_new_craft_input() {
         .expect("Failed to add craft node");
 
     // Check craft initial state (should be rate 0)
-    let (c_ins, _c_outs) = app.get_node_pin_rates(craft_id).unwrap();
-    println!("Craft before link: ins={:?}", c_ins);
+    let (c_ins, _c_outs) = app
+        .get_node_pin_rates(craft_id)
+        .expect("Failed to get craft pin rates");
+    log::debug!("Craft before link: ins={c_ins:?}");
 
     // Connect merger output -> craft input
     // This is what happens when you drop a wire from merger output onto a new craft node
-    let m_out = app.get_pin_id(merger_id, PinDirection::Output, 0).unwrap();
-    let c_in = app.get_pin_id(craft_id, PinDirection::Input, 0).unwrap();
+    let m_out = app
+        .get_pin_id(merger_id, PinDirection::Output, 0)
+        .expect("Failed to get merger output pin");
+    let c_in = app
+        .get_pin_id(craft_id, PinDirection::Input, 0)
+        .expect("Failed to get craft input pin");
 
     let result = app.create_link(m_out, c_in);
-    if let Err(ref e) = result {
-        println!("Link creation error: {:?}", e);
+    if let Err(e) = &result {
+        log::debug!("Link creation error: {e:?}");
     }
-    if let Ok((_, ref warn)) = result {
-        println!("Link creation warning: {:?}", warn);
+    if let Ok((_, warn)) = &result {
+        log::debug!("Link creation warning: {warn:?}");
     }
     assert!(
         result.is_ok(),
-        "create_link should succeed, got: {:?}",
+        "create_link should succeed, got: {:#?}",
         result.err()
     );
 
     // After the link, the craft input should receive the merger output's rate (20)
-    let (c_ins_after, c_outs_after) = app.get_node_pin_rates(craft_id).unwrap();
-    let (m_ins_after, m_outs_after) = app.get_node_pin_rates(merger_id).unwrap();
-    println!(
-        "After link: craft ins={:?}, outs={:?}",
-        c_ins_after, c_outs_after
-    );
-    println!(
-        "After link: merger ins={:?}, outs={:?}",
-        m_ins_after, m_outs_after
-    );
+    let (c_ins_after, c_outs_after) = app
+        .get_node_pin_rates(craft_id)
+        .expect("Failed to get craft pin rates after linking");
+    let (m_ins_after, m_outs_after) = app
+        .get_node_pin_rates(merger_id)
+        .expect("Failed to get merger pin rates after linking");
+    log::debug!("After link: craft ins={c_ins_after:?}, outs={c_outs_after:?}");
+    log::debug!("After link: merger ins={m_ins_after:?}, outs={m_outs_after:?}");
 
     // Craft input 0 should have rate 20 (from merger output)
-    let c_in0_rate = c_ins_after[0]
-        .as_ref()
+    let c_in0_rate = c_ins_after
+        .first()
+        .and_then(|o| o.as_ref())
         .expect("Craft input 0 should have a rate");
     assert!(
         c_in0_rate == "20" || c_in0_rate == "20/1",
-        "Craft input should receive merger output rate (20), got: {}",
-        c_in0_rate
+        "Craft input should receive merger output rate (20), got: {c_in0_rate}"
     );
 }
 
@@ -1001,25 +1163,27 @@ fn test_splitter_outputs_independent_input_adjusts() {
     .expect("Failed to set splitter input rate");
 
     // Check splitter state: input = 60, outputs = [20, 20, 20] (equal distribution for 3 outputs)
-    let (s_ins, s_outs) = app.get_node_pin_rates(splitter_id).unwrap();
-    println!("Splitter initial: ins={:?}, outs={:?}", s_ins, s_outs);
+    let (s_ins, s_outs) = app
+        .get_node_pin_rates(splitter_id)
+        .expect("Failed to get splitter pin rates");
+    log::debug!("Splitter initial: ins={s_ins:?}, outs={s_outs:?}");
 
     // Input should be 60
-    let in_rate = s_ins[0].as_ref().unwrap();
+    let in_rate = s_ins
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Splitter input should have a rate");
     assert!(
         in_rate == "60" || in_rate == "60/1",
-        "Input should be 60, got: {}",
-        in_rate
+        "Input should be 60, got: {in_rate}"
     );
 
     // All outputs should be 20 (60 / 3)
     for (i, out) in s_outs.iter().enumerate() {
-        let out_rate = out.as_ref().unwrap();
+        let out_rate = out.as_ref().expect("Splitter output missing");
         assert!(
             out_rate == "20" || out_rate == "20/1",
-            "Output {} should be 20, got: {}",
-            i,
-            out_rate
+            "Output {i} should be 20, got: {out_rate}",
         );
     }
 
@@ -1032,41 +1196,48 @@ fn test_splitter_outputs_independent_input_adjusts() {
     )
     .expect("Failed to set splitter output 1");
 
-    let (s_ins_after, s_outs_after) = app.get_node_pin_rates(splitter_id).unwrap();
-    println!(
-        "Splitter after setting out1=30: ins={:?}, outs={:?}",
-        s_ins_after, s_outs_after
-    );
+    let (s_ins_after, s_outs_after) = app
+        .get_node_pin_rates(splitter_id)
+        .expect("Failed to get splitter pin rates after changing output");
+    log::debug!("Splitter after setting out1=30: ins={s_ins_after:?}, outs={s_outs_after:?}");
 
     // Output 1 should be 30
-    let out1_rate = s_outs_after[1].as_ref().unwrap();
+    let out1_rate = s_outs_after
+        .get(1)
+        .and_then(|o| o.as_ref())
+        .expect("Splitter out1 missing");
     assert!(
         out1_rate == "30" || out1_rate == "30/1",
-        "Output 1 should be 30, got: {}",
-        out1_rate
+        "Output 1 should be 30, got: {out1_rate}"
     );
 
     // Output 0 should STILL be 20 (independent)
-    let out0_after = s_outs_after[0].as_ref().unwrap();
+    let out0_after = s_outs_after
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Splitter out0 missing");
     assert!(
         out0_after == "20" || out0_after == "20/1",
-        "Output 0 should remain 20 (independent), got: {}",
-        out0_after
+        "Output 0 should remain 20 (independent), got: {out0_after}"
     );
 
     // Output 2 should STILL be 20 (independent)
-    let out2_after = s_outs_after[2].as_ref().unwrap();
+    let out2_after = s_outs_after
+        .get(2)
+        .and_then(|o| o.as_ref())
+        .expect("Splitter out2 missing");
     assert!(
         out2_after == "20" || out2_after == "20/1",
-        "Output 2 should remain 20 (independent), got: {}",
-        out2_after
+        "Output 2 should remain 20 (independent), got: {out2_after}"
     );
 
     // Input should be sum of outputs: 20 + 30 + 20 = 70
-    let in_after = s_ins_after[0].as_ref().unwrap();
+    let in_after = s_ins_after
+        .first()
+        .and_then(|o| o.as_ref())
+        .expect("Splitter input missing");
     assert!(
         in_after == "70" || in_after == "70/1",
-        "Input should be 70 (sum of outputs), got: {}",
-        in_after
+        "Input should be 70 (sum of outputs), got: {in_after}"
     );
 }

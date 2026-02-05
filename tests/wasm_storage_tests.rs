@@ -68,10 +68,18 @@ fn test_localstorage_list_saves() {
     let storage = get_storage();
 
     // Create multiple test saves
-    storage.set_item("saves/test_alpha.fcs", "{}").unwrap();
-    storage.set_item("saves/test_beta.fcs", "{}").unwrap();
-    storage.set_item("saves/test_gamma.fcs", "{}").unwrap();
-    storage.set_item("other_key", "{}").unwrap(); // Should not be included
+    storage
+        .set_item("saves/test_alpha.fcs", "{}")
+        .expect("set_item failed");
+    storage
+        .set_item("saves/test_beta.fcs", "{}")
+        .expect("set_item failed");
+    storage
+        .set_item("saves/test_gamma.fcs", "{}")
+        .expect("set_item failed");
+    storage
+        .set_item("other_key", "{}")
+        .expect("set_item failed"); // Should not be included
 
     // Enumerate saves
     let mut found_saves = Vec::new();
@@ -97,10 +105,18 @@ fn test_localstorage_list_saves() {
     assert!(found_saves.contains(&"test_gamma".to_string()));
 
     // Cleanup
-    storage.remove_item("saves/test_alpha.fcs").unwrap();
-    storage.remove_item("saves/test_beta.fcs").unwrap();
-    storage.remove_item("saves/test_gamma.fcs").unwrap();
-    storage.remove_item("other_key").unwrap();
+    storage
+        .remove_item("saves/test_alpha.fcs")
+        .expect("remove_item failed");
+    storage
+        .remove_item("saves/test_beta.fcs")
+        .expect("remove_item failed");
+    storage
+        .remove_item("saves/test_gamma.fcs")
+        .expect("remove_item failed");
+    storage
+        .remove_item("other_key")
+        .expect("remove_item failed");
 }
 
 #[wasm_bindgen_test]
@@ -111,15 +127,21 @@ fn test_localstorage_overwrite_save() {
     let key = "saves/test_overwrite.fcs";
 
     // Initial save
-    storage.set_item(key, "version1").unwrap();
-    assert_eq!(storage.get_item(key).unwrap(), Some("version1".to_string()));
+    storage.set_item(key, "version1").expect("set_item failed");
+    assert_eq!(
+        storage.get_item(key).expect("get_item failed"),
+        Some("version1".to_string())
+    );
 
     // Overwrite
-    storage.set_item(key, "version2").unwrap();
-    assert_eq!(storage.get_item(key).unwrap(), Some("version2".to_string()));
+    storage.set_item(key, "version2").expect("set_item failed");
+    assert_eq!(
+        storage.get_item(key).expect("get_item failed"),
+        Some("version2".to_string())
+    );
 
     // Cleanup
-    storage.remove_item(key).unwrap();
+    storage.remove_item(key).expect("remove_item failed");
 }
 
 #[wasm_bindgen_test]
@@ -130,15 +152,15 @@ fn test_localstorage_delete_save() {
     let key = "saves/test_delete.fcs";
 
     // Create
-    storage.set_item(key, "content").unwrap();
-    assert!(storage.get_item(key).unwrap().is_some());
+    storage.set_item(key, "content").expect("set_item failed");
+    assert!(storage.get_item(key).expect("get_item failed").is_some());
 
     // Delete
-    storage.remove_item(key).unwrap();
-    assert!(storage.get_item(key).unwrap().is_none());
+    storage.remove_item(key).expect("remove_item failed");
+    assert!(storage.get_item(key).expect("get_item failed").is_none());
 
     // Delete non-existent (should not error)
-    storage.remove_item(key).unwrap();
+    storage.remove_item(key).expect("remove_item failed");
 }
 
 #[wasm_bindgen_test]
@@ -176,10 +198,13 @@ fn test_localstorage_json_content() {
     let json = app.save_to_json().expect("serialize failed");
 
     // Save to localStorage
-    storage.set_item(key, &json).unwrap();
+    storage.set_item(key, &json).expect("set_item failed");
 
     // Load and verify
-    let loaded = storage.get_item(key).unwrap().expect("not found");
+    let loaded = storage
+        .get_item(key)
+        .expect("get_item failed")
+        .expect("not found");
 
     // Parse as JSON to verify format
     let parsed: serde_json::Value = serde_json::from_str(&loaded).expect("invalid JSON");
@@ -188,7 +213,7 @@ fn test_localstorage_json_content() {
     assert!(parsed.get("links").is_some());
 
     // Cleanup
-    storage.remove_item(key).unwrap();
+    storage.remove_item(key).expect("remove_item failed");
 }
 
 #[wasm_bindgen_test]
@@ -201,11 +226,11 @@ fn test_localstorage_special_characters_in_name() {
     let key = "saves/test_special äöü 日本語.fcs";
     let content = "test content";
 
-    storage.set_item(key, content).unwrap();
-    let loaded = storage.get_item(key).unwrap();
+    storage.set_item(key, content).expect("set_item failed");
+    let loaded = storage.get_item(key).expect("get_item failed");
     assert_eq!(loaded, Some(content.to_string()));
 
-    storage.remove_item(key).unwrap();
+    storage.remove_item(key).expect("remove_item failed");
 }
 
 #[wasm_bindgen_test]
@@ -218,11 +243,16 @@ fn test_localstorage_large_save() {
     // Create a large-ish content (100KB of JSON-like data)
     let large_content = format!(r#"{{"data": "{}"}}"#, "x".repeat(100_000));
 
-    storage.set_item(key, &large_content).unwrap();
-    let loaded = storage.get_item(key).unwrap().expect("not found");
+    storage
+        .set_item(key, &large_content)
+        .expect("set_item failed");
+    let loaded = storage
+        .get_item(key)
+        .expect("get_item failed")
+        .expect("not found");
     assert_eq!(loaded.len(), large_content.len());
 
-    storage.remove_item(key).unwrap();
+    storage.remove_item(key).expect("remove_item failed");
 }
 
 // Include real test files at compile time
@@ -263,7 +293,10 @@ fn test_localstorage_save_real_production_chain() {
         .expect("localStorage set failed");
 
     // Load from localStorage
-    let loaded = storage.get_item(key).unwrap().expect("not found");
+    let loaded = storage
+        .get_item(key)
+        .expect("get_item failed")
+        .expect("not found");
 
     // Load back into a new app
     let mut app2 = ProductionApp::new();
@@ -274,7 +307,7 @@ fn test_localstorage_save_real_production_chain() {
     assert_eq!(app.nodes.len(), app2.nodes.len(), "Node count mismatch");
     assert_eq!(app.links.len(), app2.links.len(), "Link count mismatch");
 
-    storage.remove_item(key).unwrap();
+    storage.remove_item(key).expect("remove_item failed");
 }
 
 #[wasm_bindgen_test]
@@ -301,7 +334,10 @@ fn test_localstorage_save_nuclear_plant() {
         .expect("localStorage set failed");
 
     // Load from localStorage
-    let loaded = storage.get_item(key).unwrap().expect("not found");
+    let loaded = storage
+        .get_item(key)
+        .expect("get_item failed")
+        .expect("not found");
 
     // Load back into a new app
     let mut app2 = ProductionApp::new();
@@ -324,7 +360,7 @@ fn test_localstorage_save_nuclear_plant() {
         app2.links.len()
     );
 
-    storage.remove_item(key).unwrap();
+    storage.remove_item(key).expect("remove_item failed");
 }
 
 #[wasm_bindgen_test]
@@ -388,7 +424,7 @@ fn test_localstorage_roundtrip_all_saves() {
         );
 
         // Cleanup
-        storage.remove_item(&key).unwrap();
+        storage.remove_item(&key).expect("remove_item failed");
     }
 }
 
@@ -402,33 +438,64 @@ fn test_localstorage_double_roundtrip() {
     let mut app1 = ProductionApp::new();
     app1.load_from_json(PRODUCTION_CHAIN_FCS, Some(&game_data))
         .unwrap();
-    let json1 = app1.save_to_json().unwrap();
+    let json1 = app1.save_to_json().expect("save_to_json failed");
 
-    storage.set_item("saves/test_rt1.fcs", &json1).unwrap();
-    let loaded1 = storage.get_item("saves/test_rt1.fcs").unwrap().unwrap();
+    storage
+        .set_item("saves/test_rt1.fcs", &json1)
+        .expect("set_item failed");
+    let loaded1 = storage
+        .get_item("saves/test_rt1.fcs")
+        .expect("get_item failed")
+        .expect("not found");
 
     // Second roundtrip
     let mut app2 = ProductionApp::new();
-    app2.load_from_json(&loaded1, Some(&game_data)).unwrap();
-    let json2 = app2.save_to_json().unwrap();
+    app2.load_from_json(&loaded1, Some(&game_data))
+        .expect("load_from_json failed");
+    let json2 = app2.save_to_json().expect("save_to_json failed");
 
-    storage.set_item("saves/test_rt2.fcs", &json2).unwrap();
-    let loaded2 = storage.get_item("saves/test_rt2.fcs").unwrap().unwrap();
+    storage
+        .set_item("saves/test_rt2.fcs", &json2)
+        .expect("set_item failed");
+    let loaded2 = storage
+        .get_item("saves/test_rt2.fcs")
+        .expect("get_item failed")
+        .expect("not found");
 
     // Parse and compare
-    let parsed1: serde_json::Value = serde_json::from_str(&loaded1).unwrap();
-    let parsed2: serde_json::Value = serde_json::from_str(&loaded2).unwrap();
+    let parsed1: serde_json::Value = serde_json::from_str(&loaded1).expect("invalid JSON");
+    let parsed2: serde_json::Value = serde_json::from_str(&loaded2).expect("invalid JSON");
 
     // Compare node and link counts (should be identical after first normalization)
-    let nodes1 = parsed1.get("nodes").unwrap().as_array().unwrap().len();
-    let nodes2 = parsed2.get("nodes").unwrap().as_array().unwrap().len();
-    let links1 = parsed1.get("links").unwrap().as_array().unwrap().len();
-    let links2 = parsed2.get("links").unwrap().as_array().unwrap().len();
+    let nodes1 = parsed1
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .expect("nodes array missing")
+        .len();
+    let nodes2 = parsed2
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .expect("nodes array missing")
+        .len();
+    let links1 = parsed1
+        .get("links")
+        .and_then(|v| v.as_array())
+        .expect("links array missing")
+        .len();
+    let links2 = parsed2
+        .get("links")
+        .and_then(|v| v.as_array())
+        .expect("links array missing")
+        .len();
 
     assert_eq!(nodes1, nodes2, "Node count differs between roundtrips");
     assert_eq!(links1, links2, "Link count differs between roundtrips");
 
     // Cleanup
-    storage.remove_item("saves/test_rt1.fcs").unwrap();
-    storage.remove_item("saves/test_rt2.fcs").unwrap();
+    storage
+        .remove_item("saves/test_rt1.fcs")
+        .expect("remove_item failed");
+    storage
+        .remove_item("saves/test_rt2.fcs")
+        .expect("remove_item failed");
 }

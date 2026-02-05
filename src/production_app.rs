@@ -4453,6 +4453,611 @@ impl Default for ProductionApp {
     }
 }
 
+impl ProductionApp {
+    /// Group selected nodes into a single `GroupNode`.
+    /// Takes a list of node IDs to group and returns the new group node ID.
+    pub fn group_nodes(&mut self, node_ids: &[u64]) -> Result<u64, String> {
+        use crate::node::{GroupNode, GroupedLink, GroupedNode, GroupedNodeData, GroupedPin};
+
+        if node_ids.is_empty() {
+            return Err("No nodes selected for grouping".to_owned());
+        }
+
+        // Find all nodes to be grouped
+        let mut nodes_to_group: Vec<usize> = Vec::new();
+        for node_id in node_ids {
+            if let Some(idx) = self.find_node_index(*node_id) {
+                nodes_to_group.push(idx);
+            }
+        }
+
+        if nodes_to_group.is_empty() {
+            return Err("No valid nodes found for grouping".to_owned());
+        }
+
+        // Sort indices in reverse order for safe removal
+        nodes_to_group.sort();
+        nodes_to_group.reverse();
+
+        // Find the top-left corner of the group
+        let mut min_pos = (f32::MAX, f32::MAX);
+        for &idx in &nodes_to_group {
+            let pos = self.get_node_position(idx).unwrap_or((0.0, 0.0));
+            min_pos.0 = min_pos.0.min(pos.0);
+            min_pos.1 = min_pos.1.min(pos.1);
+        }
+
+        // Collect node IDs for link processing
+        let grouped_node_ids: std::collections::HashSet<u64> = nodes_to_group
+            .iter()
+            .filter_map(|&idx| self.find_node_by_index(idx))
+            .collect();
+
+        // Find links that are entirely within the group and those that cross the boundary
+        let mut internal_links: Vec<(usize, usize, usize, usize)> = Vec::new(); // (start_node_idx, start_pin_idx, end_node_idx, end_pin_idx)
+        let mut external_link_ids: Vec<u64> = Vec::new();
+
+        for link in &self.links {
+            let start_loc = self.find_pin_location(link.start_pin_id);
+            let end_loc = self.find_pin_location(link.end_pin_id);
+
+            if let (Some((start_node_id, _, start_pin_idx)), Some((end_node_id, _, end_pin_idx))) =
+                (start_loc, end_loc)
+            {
+                let start_in_group = grouped_node_ids.contains(&start_node_id);
+                let end_in_group = grouped_node_ids.contains(&end_node_id);
+
+                if start_in_group && end_in_group {
+                    // Internal link - will be kept in the group
+                    // Need to map node IDs to indices within the group
+                    let start_group_idx = node_ids.iter().position(|&id| id == start_node_id);
+                    let end_group_idx = node_ids.iter().position(|&id| id == end_node_id);
+                    if let (Some(s_idx), Some(e_idx)) = (start_group_idx, end_group_idx) {
+                        internal_links.push((s_idx, start_pin_idx, e_idx, end_pin_idx));
+                    }
+                } else if start_in_group || end_in_group {
+                    // External link - will be deleted
+                    external_link_ids.push(link.id);
+                }
+            }
+        }
+
+        // Delete external links first
+        for link_id in external_link_ids {
+            let _: Result<(), String> = self.delete_link(link_id);
+        }
+
+        // Convert nodes to GroupedNode format and collect base rates
+        let mut grouped_nodes: Vec<GroupedNode> = Vec::new();
+        let mut nodes_base_rate: Vec<FractionalNumber> = Vec::new();
+
+        // Process nodes in original order (not reverse)
+        let mut sorted_indices = nodes_to_group.clone();
+        sorted_indices.sort();
+
+        for &idx in &sorted_indices {
+            let pos = self.get_node_position(idx).unwrap_or((0.0, 0.0));
+            let relative_pos = (pos.0 - min_pos.0, pos.1 - min_pos.1);
+
+            let node_any = &self.nodes[idx];
+
+            if let Some(craft) = node_any.downcast_ref::<CraftNode>() {
+                nodes_base_rate.push(craft.current_rate);
+
+                let ins: Vec<GroupedPin> = craft
+                    .base
+                    .ins
+                    .iter()
+                    .map(|p| GroupedPin {
+                        item_name: p.item_name.clone(),
+                        base_rate: p.base_rate,
+                        current_rate: p.current_rate,
+                        locked: p.locked,
+                    })
+                    .collect();
+
+                let outs: Vec<GroupedPin> = craft
+                    .base
+                    .outs
+                    .iter()
+                    .map(|p| GroupedPin {
+                        item_name: p.item_name.clone(),
+                        base_rate: p.base_rate,
+                        current_rate: p.current_rate,
+                        locked: p.locked,
+                    })
+                    .collect();
+
+                grouped_nodes.push(GroupedNode {
+                    node_data: GroupedNodeData::Craft {
+                        recipe_name: craft.recipe_name.clone(),
+                        current_rate: craft.current_rate,
+                        num_somersloop: craft.num_somersloop,
+                        built: craft.built,
+                        building_name: craft.building_name.clone(),
+                        recipe_power: craft.recipe_power,
+                        power_exponent: craft.power_exponent,
+                        somersloop_power_exponent: craft.somersloop_power_exponent,
+                        somersloop_mult: craft.somersloop_mult,
+                        variable_power: craft.variable_power,
+                        ins,
+                        outs,
+                    },
+                    relative_pos,
+                });
+            } else if let Some(org) = node_any.downcast_ref::<OrganizerNode>() {
+                nodes_base_rate.push(FractionalNumber::default());
+
+                let ins: Vec<GroupedPin> = org
+                    .base
+                    .ins
+                    .iter()
+                    .map(|p| GroupedPin {
+                        item_name: p.item_name.clone(),
+                        base_rate: p.base_rate,
+                        current_rate: p.current_rate,
+                        locked: p.locked,
+                    })
+                    .collect();
+
+                let outs: Vec<GroupedPin> = org
+                    .base
+                    .outs
+                    .iter()
+                    .map(|p| GroupedPin {
+                        item_name: p.item_name.clone(),
+                        base_rate: p.base_rate,
+                        current_rate: p.current_rate,
+                        locked: p.locked,
+                    })
+                    .collect();
+
+                grouped_nodes.push(GroupedNode {
+                    node_data: GroupedNodeData::Organizer {
+                        kind: org.base.kind,
+                        item_name: org.item_name.clone(),
+                        ins,
+                        outs,
+                    },
+                    relative_pos,
+                });
+            } else if let Some(sink) = node_any.downcast_ref::<SinkNode>() {
+                nodes_base_rate.push(FractionalNumber::default());
+
+                let ins: Vec<GroupedPin> = sink
+                    .base
+                    .ins
+                    .iter()
+                    .map(|p| GroupedPin {
+                        item_name: p.item_name.clone(),
+                        base_rate: p.base_rate,
+                        current_rate: p.current_rate,
+                        locked: p.locked,
+                    })
+                    .collect();
+
+                grouped_nodes.push(GroupedNode {
+                    node_data: GroupedNodeData::Sink {
+                        item_name: sink.item_name.clone(),
+                        ins,
+                    },
+                    relative_pos,
+                });
+            } else if let Some(group) = node_any.downcast_ref::<GroupNode>() {
+                nodes_base_rate.push(group.current_rate);
+
+                let ins: Vec<GroupedPin> = group
+                    .base
+                    .ins
+                    .iter()
+                    .map(|p| GroupedPin {
+                        item_name: p.item_name.clone(),
+                        base_rate: p.base_rate,
+                        current_rate: p.current_rate,
+                        locked: p.locked,
+                    })
+                    .collect();
+
+                let outs: Vec<GroupedPin> = group
+                    .base
+                    .outs
+                    .iter()
+                    .map(|p| GroupedPin {
+                        item_name: p.item_name.clone(),
+                        base_rate: p.base_rate,
+                        current_rate: p.current_rate,
+                        locked: p.locked,
+                    })
+                    .collect();
+
+                grouped_nodes.push(GroupedNode {
+                    node_data: GroupedNodeData::Group {
+                        name: group.name.clone(),
+                        current_rate: group.current_rate,
+                        nodes: group.grouped_nodes.clone(),
+                        links: group.grouped_links.clone(),
+                        ins,
+                        outs,
+                    },
+                    relative_pos,
+                });
+            }
+        }
+
+        // Convert internal links to GroupedLink format
+        let grouped_links: Vec<GroupedLink> = internal_links
+            .into_iter()
+            .map(|(s_node, s_pin, e_node, e_pin)| GroupedLink {
+                start_node_idx: s_node,
+                start_pin_idx: s_pin,
+                end_node_idx: e_node,
+                end_pin_idx: e_pin,
+            })
+            .collect();
+
+        // Remove the nodes that are being grouped (in reverse order to preserve indices)
+        for &idx in &nodes_to_group {
+            self.nodes.remove(idx);
+        }
+
+        // Create the group node
+        let group_id = self.get_next_id();
+        let mut group_node = GroupNode::from_nodes_and_links(
+            group_id,
+            String::new(), // Empty name initially
+            grouped_nodes,
+            nodes_base_rate,
+            grouped_links,
+        );
+        group_node.base.position = min_pos;
+
+        // Assign proper pin IDs
+        for pin in &mut group_node.base.ins {
+            pin.id = self.get_next_id();
+            pin.node_id = group_id;
+        }
+        for pin in &mut group_node.base.outs {
+            pin.id = self.get_next_id();
+            pin.node_id = group_id;
+        }
+
+        self.nodes.push(Box::new(group_node));
+
+        Ok(group_id)
+    }
+
+    /// Ungroup a group node, restoring its contained nodes to the graph.
+    /// Returns the IDs of the restored nodes.
+    pub fn ungroup_node(
+        &mut self,
+        group_node_id: u64,
+        game_data: Option<&crate::game_data::GameData>,
+    ) -> Result<Vec<u64>, String> {
+        let group_idx = self
+            .find_node_index(group_node_id)
+            .ok_or_else(|| format!("Group node {group_node_id} not found"))?;
+
+        // Get group data
+        let group_node = self.nodes[group_idx]
+            .downcast_ref::<crate::node::GroupNode>()
+            .ok_or("Node is not a group")?
+            .clone();
+
+        let group_pos = group_node.base.position;
+        let group_rate = group_node.current_rate;
+
+        // Collect all external pin IDs from the group node
+        let mut group_pin_ids: Vec<u64> = Vec::new();
+        for pin in &group_node.base.ins {
+            group_pin_ids.push(pin.id);
+        }
+        for pin in &group_node.base.outs {
+            group_pin_ids.push(pin.id);
+        }
+
+        // Remove external links connected to the group node
+        self.links.retain(|link| {
+            !group_pin_ids.contains(&link.start_pin_id) && !group_pin_ids.contains(&link.end_pin_id)
+        });
+
+        // Also clear link_id references on pins of nodes that were connected to this group
+        for node_any in &mut self.nodes {
+            if let Some(n) = node_any.downcast_mut::<CraftNode>() {
+                for pin in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if let Some(lid) = pin.link_id {
+                        if !self.links.iter().any(|l| l.id == lid) {
+                            pin.link_id = None;
+                        }
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_mut::<OrganizerNode>() {
+                for pin in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if let Some(lid) = pin.link_id {
+                        if !self.links.iter().any(|l| l.id == lid) {
+                            pin.link_id = None;
+                        }
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_mut::<crate::node::GroupNode>() {
+                for pin in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
+                    if let Some(lid) = pin.link_id {
+                        if !self.links.iter().any(|l| l.id == lid) {
+                            pin.link_id = None;
+                        }
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_mut::<SinkNode>() {
+                for pin in &mut n.base.ins {
+                    if let Some(lid) = pin.link_id {
+                        if !self.links.iter().any(|l| l.id == lid) {
+                            pin.link_id = None;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Remove the group node
+        self.nodes.remove(group_idx);
+
+        // Track the new node IDs
+        let mut new_node_ids: Vec<u64> = Vec::new();
+        // Map from grouped_nodes index to new node ID
+        let mut idx_to_new_id: std::collections::HashMap<usize, u64> =
+            std::collections::HashMap::new();
+
+        // Restore each grouped node
+        for (idx, grouped_node) in group_node.grouped_nodes.iter().enumerate() {
+            let abs_pos = (
+                grouped_node.relative_pos.0 + group_pos.0,
+                grouped_node.relative_pos.1 + group_pos.1,
+            );
+
+            let base_rate = group_node
+                .nodes_base_rate
+                .get(idx)
+                .copied()
+                .unwrap_or_default();
+            let actual_rate = base_rate * group_rate;
+
+            match &grouped_node.node_data {
+                crate::node::GroupedNodeData::Craft {
+                    recipe_name,
+                    num_somersloop,
+                    built,
+                    ..
+                } => {
+                    // Re-create the craft node using game data if available
+                    if let Some(gd) = game_data {
+                        match self.add_craft_node(recipe_name, gd) {
+                            Ok(node_id) => {
+                                if let Some(ni) = self.find_node_index(node_id) {
+                                    if let Some(craft) = self.nodes[ni].downcast_mut::<CraftNode>()
+                                    {
+                                        craft.base.position = abs_pos;
+                                        craft.num_somersloop = *num_somersloop;
+                                        craft.built = *built;
+                                        craft.update_rate(actual_rate);
+                                    }
+                                }
+                                new_node_ids.push(node_id);
+                                idx_to_new_id.insert(idx, node_id);
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to restore craft node {recipe_name}: {e}");
+                            }
+                        }
+                    } else {
+                        // Without game data, create a minimal craft node
+                        let node_id = self.get_next_id();
+                        let mut craft = CraftNode::new(node_id, recipe_name.clone());
+                        craft.base.position = abs_pos;
+                        craft.num_somersloop = *num_somersloop;
+                        craft.built = *built;
+                        craft.update_rate(actual_rate);
+                        self.nodes.push(Box::new(craft));
+                        new_node_ids.push(node_id);
+                        idx_to_new_id.insert(idx, node_id);
+                    }
+                }
+                crate::node::GroupedNodeData::Organizer {
+                    kind,
+                    item_name,
+                    ins,
+                    outs,
+                } => {
+                    let node_id = self.get_next_id();
+                    let mut org = OrganizerNode::new(node_id, *kind, item_name.clone());
+                    org.base.position = abs_pos;
+
+                    // Restore pins
+                    org.base.ins.clear();
+                    for gp in ins {
+                        let pin_id = self.get_next_id();
+                        let mut pin = Pin::new(
+                            pin_id,
+                            PinDirection::Input,
+                            node_id,
+                            gp.item_name.clone(),
+                            gp.locked,
+                            gp.base_rate,
+                        );
+                        pin.current_rate = gp.current_rate * group_rate;
+                        org.base.ins.push(pin);
+                    }
+
+                    org.base.outs.clear();
+                    for gp in outs {
+                        let pin_id = self.get_next_id();
+                        let mut pin = Pin::new(
+                            pin_id,
+                            PinDirection::Output,
+                            node_id,
+                            gp.item_name.clone(),
+                            gp.locked,
+                            gp.base_rate,
+                        );
+                        pin.current_rate = gp.current_rate * group_rate;
+                        org.base.outs.push(pin);
+                    }
+
+                    self.nodes.push(Box::new(org));
+                    new_node_ids.push(node_id);
+                    idx_to_new_id.insert(idx, node_id);
+                }
+                crate::node::GroupedNodeData::Sink { item_name, ins } => {
+                    let node_id = self.get_next_id();
+                    let mut sink = SinkNode::new(node_id, item_name.clone());
+                    sink.base.position = abs_pos;
+
+                    // Restore pins
+                    sink.base.ins.clear();
+                    for gp in ins {
+                        let pin_id = self.get_next_id();
+                        let mut pin = Pin::new(
+                            pin_id,
+                            PinDirection::Input,
+                            node_id,
+                            gp.item_name.clone(),
+                            gp.locked,
+                            gp.base_rate,
+                        );
+                        pin.current_rate = gp.current_rate * group_rate;
+                        sink.base.ins.push(pin);
+                    }
+
+                    self.nodes.push(Box::new(sink));
+                    new_node_ids.push(node_id);
+                    idx_to_new_id.insert(idx, node_id);
+                }
+                crate::node::GroupedNodeData::Group {
+                    name,
+                    current_rate,
+                    nodes,
+                    links,
+                    ins,
+                    outs,
+                } => {
+                    // Nested group - restore as another GroupNode
+                    let node_id = self.get_next_id();
+                    let mut nested_group = crate::node::GroupNode::new(node_id);
+                    nested_group.base.position = abs_pos;
+                    nested_group.name = name.clone();
+                    nested_group.current_rate = *current_rate * group_rate;
+                    nested_group.grouped_nodes = nodes.clone();
+                    nested_group.grouped_links = links.clone();
+
+                    // Restore pins
+                    nested_group.base.ins.clear();
+                    for gp in ins {
+                        let pin_id = self.get_next_id();
+                        let mut pin = Pin::new(
+                            pin_id,
+                            PinDirection::Input,
+                            node_id,
+                            gp.item_name.clone(),
+                            gp.locked,
+                            gp.base_rate,
+                        );
+                        pin.current_rate = gp.current_rate * group_rate;
+                        nested_group.base.ins.push(pin);
+                    }
+
+                    nested_group.base.outs.clear();
+                    for gp in outs {
+                        let pin_id = self.get_next_id();
+                        let mut pin = Pin::new(
+                            pin_id,
+                            PinDirection::Output,
+                            node_id,
+                            gp.item_name.clone(),
+                            gp.locked,
+                            gp.base_rate,
+                        );
+                        pin.current_rate = gp.current_rate * group_rate;
+                        nested_group.base.outs.push(pin);
+                    }
+
+                    self.nodes.push(Box::new(nested_group));
+                    new_node_ids.push(node_id);
+                    idx_to_new_id.insert(idx, node_id);
+                }
+            }
+        }
+
+        // Restore internal links
+        for grouped_link in &group_node.grouped_links {
+            let start_node_id = idx_to_new_id.get(&grouped_link.start_node_idx);
+            let end_node_id = idx_to_new_id.get(&grouped_link.end_node_idx);
+
+            if let (Some(&s_id), Some(&e_id)) = (start_node_id, end_node_id) {
+                if let (Some(s_ni), Some(e_ni)) =
+                    (self.find_node_index(s_id), self.find_node_index(e_id))
+                {
+                    // Get the pin IDs
+                    let start_pin_id =
+                        self.get_output_pin_id_by_index(s_ni, grouped_link.start_pin_idx);
+                    let end_pin_id = self.get_input_pin_id_by_index(e_ni, grouped_link.end_pin_idx);
+
+                    if let (Some(sp_id), Some(ep_id)) = (start_pin_id, end_pin_id) {
+                        // Create link without propagation (trigger_update = false in C++ terms)
+                        let link_id = self.get_next_id();
+                        let link = Link::new(link_id, sp_id, ep_id);
+                        self.links.push(link);
+
+                        // Update pin link references (intentionally ignore results)
+                        let _: Result<(), String> = self.set_pin_link_id(sp_id, Some(link_id));
+                        let _: Result<(), String> = self.set_pin_link_id(ep_id, Some(link_id));
+                    }
+                }
+            }
+        }
+
+        Ok(new_node_ids)
+    }
+
+    /// Helper to get output pin ID by node index and pin index
+    fn get_output_pin_id_by_index(&self, node_idx: usize, pin_idx: usize) -> Option<u64> {
+        let node_any = &self.nodes[node_idx];
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            n.base.outs.get(pin_idx).map(|p| p.id)
+        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+            n.base.outs.get(pin_idx).map(|p| p.id)
+        } else if let Some(n) = node_any.downcast_ref::<crate::node::GroupNode>() {
+            n.base.outs.get(pin_idx).map(|p| p.id)
+        } else {
+            None
+        }
+    }
+
+    /// Helper to get input pin ID by node index and pin index
+    fn get_input_pin_id_by_index(&self, node_idx: usize, pin_idx: usize) -> Option<u64> {
+        let node_any = &self.nodes[node_idx];
+        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+            n.base.ins.get(pin_idx).map(|p| p.id)
+        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+            n.base.ins.get(pin_idx).map(|p| p.id)
+        } else if let Some(n) = node_any.downcast_ref::<crate::node::GroupNode>() {
+            n.base.ins.get(pin_idx).map(|p| p.id)
+        } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+            n.base.ins.get(pin_idx).map(|p| p.id)
+        } else {
+            None
+        }
+    }
+
+    /// Check if a node is a group node
+    pub fn is_group_node(&self, node_id: u64) -> bool {
+        if let Some(idx) = self.find_node_index(node_id) {
+            self.nodes[idx]
+                .downcast_ref::<crate::node::GroupNode>()
+                .is_some()
+        } else {
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5116,610 +5721,5 @@ mod tests {
         }
 
         assert_eq!(locked, connected_set);
-    }
-}
-
-impl ProductionApp {
-    /// Group selected nodes into a single `GroupNode`.
-    /// Takes a list of node IDs to group and returns the new group node ID.
-    pub fn group_nodes(&mut self, node_ids: &[u64]) -> Result<u64, String> {
-        use crate::node::{GroupNode, GroupedLink, GroupedNode, GroupedNodeData, GroupedPin};
-
-        if node_ids.is_empty() {
-            return Err("No nodes selected for grouping".to_owned());
-        }
-
-        // Find all nodes to be grouped
-        let mut nodes_to_group: Vec<usize> = Vec::new();
-        for node_id in node_ids {
-            if let Some(idx) = self.find_node_index(*node_id) {
-                nodes_to_group.push(idx);
-            }
-        }
-
-        if nodes_to_group.is_empty() {
-            return Err("No valid nodes found for grouping".to_owned());
-        }
-
-        // Sort indices in reverse order for safe removal
-        nodes_to_group.sort();
-        nodes_to_group.reverse();
-
-        // Find the top-left corner of the group
-        let mut min_pos = (f32::MAX, f32::MAX);
-        for &idx in &nodes_to_group {
-            let pos = self.get_node_position(idx).unwrap_or((0.0, 0.0));
-            min_pos.0 = min_pos.0.min(pos.0);
-            min_pos.1 = min_pos.1.min(pos.1);
-        }
-
-        // Collect node IDs for link processing
-        let grouped_node_ids: std::collections::HashSet<u64> = nodes_to_group
-            .iter()
-            .filter_map(|&idx| self.find_node_by_index(idx))
-            .collect();
-
-        // Find links that are entirely within the group and those that cross the boundary
-        let mut internal_links: Vec<(usize, usize, usize, usize)> = Vec::new(); // (start_node_idx, start_pin_idx, end_node_idx, end_pin_idx)
-        let mut external_link_ids: Vec<u64> = Vec::new();
-
-        for link in &self.links {
-            let start_loc = self.find_pin_location(link.start_pin_id);
-            let end_loc = self.find_pin_location(link.end_pin_id);
-
-            if let (Some((start_node_id, _, start_pin_idx)), Some((end_node_id, _, end_pin_idx))) =
-                (start_loc, end_loc)
-            {
-                let start_in_group = grouped_node_ids.contains(&start_node_id);
-                let end_in_group = grouped_node_ids.contains(&end_node_id);
-
-                if start_in_group && end_in_group {
-                    // Internal link - will be kept in the group
-                    // Need to map node IDs to indices within the group
-                    let start_group_idx = node_ids.iter().position(|&id| id == start_node_id);
-                    let end_group_idx = node_ids.iter().position(|&id| id == end_node_id);
-                    if let (Some(s_idx), Some(e_idx)) = (start_group_idx, end_group_idx) {
-                        internal_links.push((s_idx, start_pin_idx, e_idx, end_pin_idx));
-                    }
-                } else if start_in_group || end_in_group {
-                    // External link - will be deleted
-                    external_link_ids.push(link.id);
-                }
-            }
-        }
-
-        // Delete external links first
-        for link_id in external_link_ids {
-            let _: Result<(), String> = self.delete_link(link_id);
-        }
-
-        // Convert nodes to GroupedNode format and collect base rates
-        let mut grouped_nodes: Vec<GroupedNode> = Vec::new();
-        let mut nodes_base_rate: Vec<FractionalNumber> = Vec::new();
-
-        // Process nodes in original order (not reverse)
-        let mut sorted_indices = nodes_to_group.clone();
-        sorted_indices.sort();
-
-        for &idx in &sorted_indices {
-            let pos = self.get_node_position(idx).unwrap_or((0.0, 0.0));
-            let relative_pos = (pos.0 - min_pos.0, pos.1 - min_pos.1);
-
-            let node_any = &self.nodes[idx];
-
-            if let Some(craft) = node_any.downcast_ref::<CraftNode>() {
-                nodes_base_rate.push(craft.current_rate);
-
-                let ins: Vec<GroupedPin> = craft
-                    .base
-                    .ins
-                    .iter()
-                    .map(|p| GroupedPin {
-                        item_name: p.item_name.clone(),
-                        base_rate: p.base_rate,
-                        current_rate: p.current_rate,
-                        locked: p.locked,
-                    })
-                    .collect();
-
-                let outs: Vec<GroupedPin> = craft
-                    .base
-                    .outs
-                    .iter()
-                    .map(|p| GroupedPin {
-                        item_name: p.item_name.clone(),
-                        base_rate: p.base_rate,
-                        current_rate: p.current_rate,
-                        locked: p.locked,
-                    })
-                    .collect();
-
-                grouped_nodes.push(GroupedNode {
-                    node_data: GroupedNodeData::Craft {
-                        recipe_name: craft.recipe_name.clone(),
-                        current_rate: craft.current_rate,
-                        num_somersloop: craft.num_somersloop,
-                        built: craft.built,
-                        building_name: craft.building_name.clone(),
-                        recipe_power: craft.recipe_power,
-                        power_exponent: craft.power_exponent,
-                        somersloop_power_exponent: craft.somersloop_power_exponent,
-                        somersloop_mult: craft.somersloop_mult,
-                        variable_power: craft.variable_power,
-                        ins,
-                        outs,
-                    },
-                    relative_pos,
-                });
-            } else if let Some(org) = node_any.downcast_ref::<OrganizerNode>() {
-                nodes_base_rate.push(FractionalNumber::default());
-
-                let ins: Vec<GroupedPin> = org
-                    .base
-                    .ins
-                    .iter()
-                    .map(|p| GroupedPin {
-                        item_name: p.item_name.clone(),
-                        base_rate: p.base_rate,
-                        current_rate: p.current_rate,
-                        locked: p.locked,
-                    })
-                    .collect();
-
-                let outs: Vec<GroupedPin> = org
-                    .base
-                    .outs
-                    .iter()
-                    .map(|p| GroupedPin {
-                        item_name: p.item_name.clone(),
-                        base_rate: p.base_rate,
-                        current_rate: p.current_rate,
-                        locked: p.locked,
-                    })
-                    .collect();
-
-                grouped_nodes.push(GroupedNode {
-                    node_data: GroupedNodeData::Organizer {
-                        kind: org.base.kind,
-                        item_name: org.item_name.clone(),
-                        ins,
-                        outs,
-                    },
-                    relative_pos,
-                });
-            } else if let Some(sink) = node_any.downcast_ref::<SinkNode>() {
-                nodes_base_rate.push(FractionalNumber::default());
-
-                let ins: Vec<GroupedPin> = sink
-                    .base
-                    .ins
-                    .iter()
-                    .map(|p| GroupedPin {
-                        item_name: p.item_name.clone(),
-                        base_rate: p.base_rate,
-                        current_rate: p.current_rate,
-                        locked: p.locked,
-                    })
-                    .collect();
-
-                grouped_nodes.push(GroupedNode {
-                    node_data: GroupedNodeData::Sink {
-                        item_name: sink.item_name.clone(),
-                        ins,
-                    },
-                    relative_pos,
-                });
-            } else if let Some(group) = node_any.downcast_ref::<GroupNode>() {
-                nodes_base_rate.push(group.current_rate);
-
-                let ins: Vec<GroupedPin> = group
-                    .base
-                    .ins
-                    .iter()
-                    .map(|p| GroupedPin {
-                        item_name: p.item_name.clone(),
-                        base_rate: p.base_rate,
-                        current_rate: p.current_rate,
-                        locked: p.locked,
-                    })
-                    .collect();
-
-                let outs: Vec<GroupedPin> = group
-                    .base
-                    .outs
-                    .iter()
-                    .map(|p| GroupedPin {
-                        item_name: p.item_name.clone(),
-                        base_rate: p.base_rate,
-                        current_rate: p.current_rate,
-                        locked: p.locked,
-                    })
-                    .collect();
-
-                grouped_nodes.push(GroupedNode {
-                    node_data: GroupedNodeData::Group {
-                        name: group.name.clone(),
-                        current_rate: group.current_rate,
-                        nodes: group.grouped_nodes.clone(),
-                        links: group.grouped_links.clone(),
-                        ins,
-                        outs,
-                    },
-                    relative_pos,
-                });
-            }
-        }
-
-        // Convert internal links to GroupedLink format
-        let grouped_links: Vec<GroupedLink> = internal_links
-            .into_iter()
-            .map(|(s_node, s_pin, e_node, e_pin)| GroupedLink {
-                start_node_idx: s_node,
-                start_pin_idx: s_pin,
-                end_node_idx: e_node,
-                end_pin_idx: e_pin,
-            })
-            .collect();
-
-        // Remove the nodes that are being grouped (in reverse order to preserve indices)
-        for &idx in &nodes_to_group {
-            self.nodes.remove(idx);
-        }
-
-        // Create the group node
-        let group_id = self.get_next_id();
-        let mut group_node = GroupNode::from_nodes_and_links(
-            group_id,
-            String::new(), // Empty name initially
-            grouped_nodes,
-            nodes_base_rate,
-            grouped_links,
-        );
-        group_node.base.position = min_pos;
-
-        // Assign proper pin IDs
-        for pin in &mut group_node.base.ins {
-            pin.id = self.get_next_id();
-            pin.node_id = group_id;
-        }
-        for pin in &mut group_node.base.outs {
-            pin.id = self.get_next_id();
-            pin.node_id = group_id;
-        }
-
-        self.nodes.push(Box::new(group_node));
-
-        Ok(group_id)
-    }
-
-    /// Ungroup a group node, restoring its contained nodes to the graph.
-    /// Returns the IDs of the restored nodes.
-    pub fn ungroup_node(
-        &mut self,
-        group_node_id: u64,
-        game_data: Option<&crate::game_data::GameData>,
-    ) -> Result<Vec<u64>, String> {
-        let group_idx = self
-            .find_node_index(group_node_id)
-            .ok_or_else(|| format!("Group node {group_node_id} not found"))?;
-
-        // Get group data
-        let group_node = self.nodes[group_idx]
-            .downcast_ref::<crate::node::GroupNode>()
-            .ok_or("Node is not a group")?
-            .clone();
-
-        let group_pos = group_node.base.position;
-        let group_rate = group_node.current_rate;
-
-        // Collect all external pin IDs from the group node
-        let mut group_pin_ids: Vec<u64> = Vec::new();
-        for pin in &group_node.base.ins {
-            group_pin_ids.push(pin.id);
-        }
-        for pin in &group_node.base.outs {
-            group_pin_ids.push(pin.id);
-        }
-
-        // Remove external links connected to the group node
-        self.links.retain(|link| {
-            !group_pin_ids.contains(&link.start_pin_id) && !group_pin_ids.contains(&link.end_pin_id)
-        });
-
-        // Also clear link_id references on pins of nodes that were connected to this group
-        for node_any in &mut self.nodes {
-            if let Some(n) = node_any.downcast_mut::<CraftNode>() {
-                for pin in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
-                    if let Some(lid) = pin.link_id {
-                        if !self.links.iter().any(|l| l.id == lid) {
-                            pin.link_id = None;
-                        }
-                    }
-                }
-            } else if let Some(n) = node_any.downcast_mut::<OrganizerNode>() {
-                for pin in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
-                    if let Some(lid) = pin.link_id {
-                        if !self.links.iter().any(|l| l.id == lid) {
-                            pin.link_id = None;
-                        }
-                    }
-                }
-            } else if let Some(n) = node_any.downcast_mut::<crate::node::GroupNode>() {
-                for pin in n.base.ins.iter_mut().chain(n.base.outs.iter_mut()) {
-                    if let Some(lid) = pin.link_id {
-                        if !self.links.iter().any(|l| l.id == lid) {
-                            pin.link_id = None;
-                        }
-                    }
-                }
-            } else if let Some(n) = node_any.downcast_mut::<SinkNode>() {
-                for pin in &mut n.base.ins {
-                    if let Some(lid) = pin.link_id {
-                        if !self.links.iter().any(|l| l.id == lid) {
-                            pin.link_id = None;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Remove the group node
-        self.nodes.remove(group_idx);
-
-        // Track the new node IDs
-        let mut new_node_ids: Vec<u64> = Vec::new();
-        // Map from grouped_nodes index to new node ID
-        let mut idx_to_new_id: std::collections::HashMap<usize, u64> =
-            std::collections::HashMap::new();
-
-        // Restore each grouped node
-        for (idx, grouped_node) in group_node.grouped_nodes.iter().enumerate() {
-            let abs_pos = (
-                grouped_node.relative_pos.0 + group_pos.0,
-                grouped_node.relative_pos.1 + group_pos.1,
-            );
-
-            let base_rate = group_node
-                .nodes_base_rate
-                .get(idx)
-                .copied()
-                .unwrap_or_default();
-            let actual_rate = base_rate * group_rate;
-
-            match &grouped_node.node_data {
-                crate::node::GroupedNodeData::Craft {
-                    recipe_name,
-                    num_somersloop,
-                    built,
-                    ..
-                } => {
-                    // Re-create the craft node using game data if available
-                    if let Some(gd) = game_data {
-                        match self.add_craft_node(recipe_name, gd) {
-                            Ok(node_id) => {
-                                if let Some(ni) = self.find_node_index(node_id) {
-                                    if let Some(craft) = self.nodes[ni].downcast_mut::<CraftNode>()
-                                    {
-                                        craft.base.position = abs_pos;
-                                        craft.num_somersloop = *num_somersloop;
-                                        craft.built = *built;
-                                        craft.update_rate(actual_rate);
-                                    }
-                                }
-                                new_node_ids.push(node_id);
-                                idx_to_new_id.insert(idx, node_id);
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to restore craft node {recipe_name}: {e}");
-                            }
-                        }
-                    } else {
-                        // Without game data, create a minimal craft node
-                        let node_id = self.get_next_id();
-                        let mut craft = CraftNode::new(node_id, recipe_name.clone());
-                        craft.base.position = abs_pos;
-                        craft.num_somersloop = *num_somersloop;
-                        craft.built = *built;
-                        craft.update_rate(actual_rate);
-                        self.nodes.push(Box::new(craft));
-                        new_node_ids.push(node_id);
-                        idx_to_new_id.insert(idx, node_id);
-                    }
-                }
-                crate::node::GroupedNodeData::Organizer {
-                    kind,
-                    item_name,
-                    ins,
-                    outs,
-                } => {
-                    let node_id = self.get_next_id();
-                    let mut org = OrganizerNode::new(node_id, *kind, item_name.clone());
-                    org.base.position = abs_pos;
-
-                    // Restore pins
-                    org.base.ins.clear();
-                    for gp in ins {
-                        let pin_id = self.get_next_id();
-                        let mut pin = Pin::new(
-                            pin_id,
-                            PinDirection::Input,
-                            node_id,
-                            gp.item_name.clone(),
-                            gp.locked,
-                            gp.base_rate,
-                        );
-                        pin.current_rate = gp.current_rate * group_rate;
-                        org.base.ins.push(pin);
-                    }
-
-                    org.base.outs.clear();
-                    for gp in outs {
-                        let pin_id = self.get_next_id();
-                        let mut pin = Pin::new(
-                            pin_id,
-                            PinDirection::Output,
-                            node_id,
-                            gp.item_name.clone(),
-                            gp.locked,
-                            gp.base_rate,
-                        );
-                        pin.current_rate = gp.current_rate * group_rate;
-                        org.base.outs.push(pin);
-                    }
-
-                    self.nodes.push(Box::new(org));
-                    new_node_ids.push(node_id);
-                    idx_to_new_id.insert(idx, node_id);
-                }
-                crate::node::GroupedNodeData::Sink { item_name, ins } => {
-                    let node_id = self.get_next_id();
-                    let mut sink = SinkNode::new(node_id, item_name.clone());
-                    sink.base.position = abs_pos;
-
-                    // Restore pins
-                    sink.base.ins.clear();
-                    for gp in ins {
-                        let pin_id = self.get_next_id();
-                        let mut pin = Pin::new(
-                            pin_id,
-                            PinDirection::Input,
-                            node_id,
-                            gp.item_name.clone(),
-                            gp.locked,
-                            gp.base_rate,
-                        );
-                        pin.current_rate = gp.current_rate * group_rate;
-                        sink.base.ins.push(pin);
-                    }
-
-                    self.nodes.push(Box::new(sink));
-                    new_node_ids.push(node_id);
-                    idx_to_new_id.insert(idx, node_id);
-                }
-                crate::node::GroupedNodeData::Group {
-                    name,
-                    current_rate,
-                    nodes,
-                    links,
-                    ins,
-                    outs,
-                } => {
-                    // Nested group - restore as another GroupNode
-                    let node_id = self.get_next_id();
-                    let mut nested_group = crate::node::GroupNode::new(node_id);
-                    nested_group.base.position = abs_pos;
-                    nested_group.name = name.clone();
-                    nested_group.current_rate = *current_rate * group_rate;
-                    nested_group.grouped_nodes = nodes.clone();
-                    nested_group.grouped_links = links.clone();
-
-                    // Restore pins
-                    nested_group.base.ins.clear();
-                    for gp in ins {
-                        let pin_id = self.get_next_id();
-                        let mut pin = Pin::new(
-                            pin_id,
-                            PinDirection::Input,
-                            node_id,
-                            gp.item_name.clone(),
-                            gp.locked,
-                            gp.base_rate,
-                        );
-                        pin.current_rate = gp.current_rate * group_rate;
-                        nested_group.base.ins.push(pin);
-                    }
-
-                    nested_group.base.outs.clear();
-                    for gp in outs {
-                        let pin_id = self.get_next_id();
-                        let mut pin = Pin::new(
-                            pin_id,
-                            PinDirection::Output,
-                            node_id,
-                            gp.item_name.clone(),
-                            gp.locked,
-                            gp.base_rate,
-                        );
-                        pin.current_rate = gp.current_rate * group_rate;
-                        nested_group.base.outs.push(pin);
-                    }
-
-                    self.nodes.push(Box::new(nested_group));
-                    new_node_ids.push(node_id);
-                    idx_to_new_id.insert(idx, node_id);
-                }
-            }
-        }
-
-        // Restore internal links
-        for grouped_link in &group_node.grouped_links {
-            let start_node_id = idx_to_new_id.get(&grouped_link.start_node_idx);
-            let end_node_id = idx_to_new_id.get(&grouped_link.end_node_idx);
-
-            if let (Some(&s_id), Some(&e_id)) = (start_node_id, end_node_id) {
-                if let (Some(s_ni), Some(e_ni)) =
-                    (self.find_node_index(s_id), self.find_node_index(e_id))
-                {
-                    // Get the pin IDs
-                    let start_pin_id =
-                        self.get_output_pin_id_by_index(s_ni, grouped_link.start_pin_idx);
-                    let end_pin_id = self.get_input_pin_id_by_index(e_ni, grouped_link.end_pin_idx);
-
-                    if let (Some(sp_id), Some(ep_id)) = (start_pin_id, end_pin_id) {
-                        // Create link without propagation (trigger_update = false in C++ terms)
-                        let link_id = self.get_next_id();
-                        let link = Link::new(link_id, sp_id, ep_id);
-                        self.links.push(link);
-
-                        // Update pin link references (intentionally ignore results)
-                        let _: Result<(), String> = self.set_pin_link_id(sp_id, Some(link_id));
-                        let _: Result<(), String> = self.set_pin_link_id(ep_id, Some(link_id));
-                    }
-                }
-            }
-        }
-
-        Ok(new_node_ids)
-    }
-
-    /// Helper to get output pin ID by node index and pin index
-    fn get_output_pin_id_by_index(&self, node_idx: usize, pin_idx: usize) -> Option<u64> {
-        let node_any = &self.nodes[node_idx];
-        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
-            n.base.outs.get(pin_idx).map(|p| p.id)
-        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
-            n.base.outs.get(pin_idx).map(|p| p.id)
-        } else if let Some(n) = node_any.downcast_ref::<crate::node::GroupNode>() {
-            n.base.outs.get(pin_idx).map(|p| p.id)
-        } else {
-            None
-        }
-    }
-
-    /// Helper to get input pin ID by node index and pin index
-    fn get_input_pin_id_by_index(&self, node_idx: usize, pin_idx: usize) -> Option<u64> {
-        let node_any = &self.nodes[node_idx];
-        if let Some(n) = node_any.downcast_ref::<CraftNode>() {
-            n.base.ins.get(pin_idx).map(|p| p.id)
-        } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
-            n.base.ins.get(pin_idx).map(|p| p.id)
-        } else if let Some(n) = node_any.downcast_ref::<crate::node::GroupNode>() {
-            n.base.ins.get(pin_idx).map(|p| p.id)
-        } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
-            n.base.ins.get(pin_idx).map(|p| p.id)
-        } else {
-            None
-        }
-    }
-
-    /// Check if a node is a group node
-    pub fn is_group_node(&self, node_id: u64) -> bool {
-        if let Some(idx) = self.find_node_index(node_id) {
-            self.nodes[idx]
-                .downcast_ref::<crate::node::GroupNode>()
-                .is_some()
-        } else {
-            false
-        }
     }
 }
