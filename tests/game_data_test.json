@@ -1,0 +1,89 @@
+{
+    "version": "1.0",
+    "buildings": [
+        {
+            "name": "Coal-Powered Generator",
+            "somersloop_mult": 1.0,
+            "power": -75.0,
+            "power_exponent": 1.0,
+            "somersloop_power_exponent": 2.0,
+            "variable_power": false
+        },
+        {
+            "name": "Fuel-Powered Generator",
+            "somersloop_mult": 1.0,
+            "power": -250.0,
+            "power_exponent": 1.0,
+            "somersloop_power_exponent": 2.0,
+            "variable_power": false
+        }
+    ],
+    "items": [
+        {
+            "name": "Packaged Liquid Biofuel",
+            "icon": "icons/IconDesc_LiquidBiofuel_64.png",
+            "sink": 370
+        },
+        {
+            "name": "Alien Power Matrix",
+            "icon": "icons/IconDesc_AlienPowerMatrix_64.png",
+            "sink": 210
+        }
+    ],
+    "recipes": [
+        {
+            "name": "Iron Plate",
+            "alternate": false,
+            "time": 6.0,
+            "building": "Constructor",
+            "inputs": [
+                {
+                    "name": "Iron Ingot",
+                    "amount": 3.0
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "Iron Plate",
+                    "amount": 2.0
+                }
+            ]
+        },
+        {
+            "name": "Iron Rod",
+            "alternate": false,
+            "time": 4.0,
+            "building": "Constructor",
+            "inputs": [
+                {
+                    "name": "Iron Ingot",
+                    "amount": 1.0
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "Iron Rod",
+                    "amount": 1.0
+                }
+            ]
+        },
+        {
+            "name": "Iron Ingot",
+            "alternate": false,
+            "time": 2.0,
+            "building": "Smelter",
+            "inputs": [
+                {
+                    "name": "Iron Ore",
+                    "amount": 1.0
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "Iron Ingot",
+                    "amount": 1.0
+                }
+            ]
+        }
+    ]
+}

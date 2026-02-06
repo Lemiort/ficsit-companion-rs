@@ -1,0 +1,820 @@
+use crate::link::Link;
+use crate::node::{CraftNode, GroupNode, OrganizerNode, SinkNode, NodeKind};
+use crate::pin::{Pin, PinDirection};
+use crate::serialization::{
+    ProductionChainFile, SerializedNode, SerializedCraftNode, SerializedSinkNode,
+    SerializedOrganizerNode, SerializedPosition, SerializedLink,
+    SerializedLinkEndpoint, SerializedSinkInput,
+};
+use crate::fractional_number::FractionalNumber;
+use crate::game_data::GameData;
+
+/// Main production app that manages the graph of nodes and links
+pub struct ProductionApp {
+    /// All nodes in the graph
+    pub nodes: Vec<Box<dyn std::any::Any>>,
+    /// All links in the graph
+    pub links: Vec<Link>,
+    /// Next available ID for nodes/links/pins
+    pub next_id: u64,
+}
+
+impl ProductionApp {
+    pub fn new() -> Self {
+        Self {
+            nodes: Vec::new(),
+            links: Vec::new(),
+            next_id: 1,
+        }
+    }
+
+    /// Get the next available ID
+    pub fn get_next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    /// Find a pin by its ID across all nodes (returns node_id, direction, pin_index_within_direction)
+    pub fn find_pin_location(&self, pin_id: u64) -> Option<(u64, PinDirection, usize)> {
+        for (_node_idx, node_any) in self.nodes.iter().enumerate() {
+            if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                for (pin_idx, p) in n.base.ins.iter().enumerate() {
+                    if p.id == pin_id {
+                        return Some((n.base.id, PinDirection::Input, pin_idx));
+                    }
+                }
+                for (pin_idx, p) in n.base.outs.iter().enumerate() {
+                    if p.id == pin_id {
+                        return Some((n.base.id, PinDirection::Output, pin_idx));
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                for (pin_idx, p) in n.base.ins.iter().enumerate() {
+                    if p.id == pin_id {
+                        return Some((n.base.id, PinDirection::Input, pin_idx));
+                    }
+                }
+                for (pin_idx, p) in n.base.outs.iter().enumerate() {
+                    if p.id == pin_id {
+                        return Some((n.base.id, PinDirection::Output, pin_idx));
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                for (pin_idx, p) in n.base.ins.iter().enumerate() {
+                    if p.id == pin_id {
+                        return Some((n.base.id, PinDirection::Input, pin_idx));
+                    }
+                }
+                for (pin_idx, p) in n.base.outs.iter().enumerate() {
+                    if p.id == pin_id {
+                        return Some((n.base.id, PinDirection::Output, pin_idx));
+                    }
+                }
+            } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+                for (pin_idx, p) in n.base.ins.iter().enumerate() {
+                    if p.id == pin_id {
+                        return Some((n.base.id, PinDirection::Input, pin_idx));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Find node index by node ID
+    fn find_node_index(&self, node_id: u64) -> Option<usize> {
+        for (idx, node_any) in self.nodes.iter().enumerate() {
+            let id = if let Some(n) = node_any.downcast_ref::<CraftNode>() {
+                n.base.id
+            } else if let Some(n) = node_any.downcast_ref::<OrganizerNode>() {
+                n.base.id
+            } else if let Some(n) = node_any.downcast_ref::<GroupNode>() {
+                n.base.id
+            } else if let Some(n) = node_any.downcast_ref::<SinkNode>() {
+                n.base.id
+            } else {
+                continue;
+            };
+            
+            if id == node_id {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    /// Find a link by pin ID
+    pub fn find_link_by_pin(&self, pin_id: u64) -> Option<&Link> {
+        self.links
+            .iter()
+            .find(|l| l.start_pin_id == pin_id || l.end_pin_id == pin_id)
+    }
+
+    /// Create a link between two pins
+    pub fn create_link(
+        &mut self,
+        start_pin_id: u64,
+        end_pin_id: u64,
+    ) -> Result<u64, String> {
+        // Validate pins exist
+        let _start_loc = self
+            .find_pin_location(start_pin_id)
+            .ok_or("Start pin not found")?;
+        let _end_loc = self
+            .find_pin_location(end_pin_id)
+            .ok_or("End pin not found")?;
+
+        // Create link
+        let link_id = self.get_next_id();
+        let link = Link::new(link_id, start_pin_id, end_pin_id);
+        self.links.push(link);
+
+        // Update pin link_id references
+        if let Some((node_id, direction, pi)) = self.find_pin_location(start_pin_id) {
+            let ni = self.find_node_index(node_id).unwrap();
+            if let Some(n) = self.nodes[ni].downcast_mut::<CraftNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = Some(link_id);
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = Some(link_id);
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<GroupNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = Some(link_id);
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+                n.base.ins[pi].link_id = Some(link_id);
+            }
+        }
+
+        if let Some((node_id, direction, pi)) = self.find_pin_location(end_pin_id) {
+            let ni = self.find_node_index(node_id).unwrap();
+            if let Some(n) = self.nodes[ni].downcast_mut::<CraftNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = Some(link_id);
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = Some(link_id);
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<GroupNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = Some(link_id);
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+                n.base.ins[pi].link_id = Some(link_id);
+            }
+        }
+
+        Ok(link_id)
+    }
+
+    /// Delete a link by ID
+    pub fn delete_link(&mut self, link_id: u64) -> Result<(), String> {
+        let link_idx = self
+            .links
+            .iter()
+            .position(|l| l.id == link_id)
+            .ok_or("Link not found")?;
+
+        let link = self.links.remove(link_idx);
+
+        // Clear pin link_id references
+        if let Some((node_id, direction, pi)) = self.find_pin_location(link.start_pin_id) {
+            let ni = self.find_node_index(node_id).unwrap();
+            if let Some(n) = self.nodes[ni].downcast_mut::<CraftNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = None;
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = None;
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<GroupNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = None;
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+                n.base.ins[pi].link_id = None;
+            }
+        }
+
+        if let Some((node_id, direction, pi)) = self.find_pin_location(link.end_pin_id) {
+            let ni = self.find_node_index(node_id).unwrap();
+            if let Some(n) = self.nodes[ni].downcast_mut::<CraftNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = None;
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<OrganizerNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = None;
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<GroupNode>() {
+                let pins = match direction {
+                    PinDirection::Input => &mut n.base.ins,
+                    PinDirection::Output => &mut n.base.outs,
+                };
+                pins[pi].link_id = None;
+            } else if let Some(n) = self.nodes[ni].downcast_mut::<SinkNode>() {
+                n.base.ins[pi].link_id = None;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Set pin locked state with propagation logic from C++
+    pub fn set_pin_locked(&mut self, pin_id: u64, locked: bool) -> Result<(), String> {
+        let (node_id, _direction, pin_idx) =
+            self.find_pin_location(pin_id).ok_or("Pin not found")?;
+        let node_idx = self.find_node_index(node_id).unwrap();
+
+        // Get current locked state, direction, and node kind
+        let (current_locked, direction, node_kind) = if let Some(n) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
+            let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
+            (pin.locked, pin.direction, n.base.kind)
+        } else if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
+            let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
+            (pin.locked, pin.direction, n.base.kind)
+        } else if let Some(n) = self.nodes[node_idx].downcast_ref::<GroupNode>() {
+            let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
+            (pin.locked, pin.direction, n.base.kind)
+        } else if let Some(n) = self.nodes[node_idx].downcast_ref::<SinkNode>() {
+            let pin = n.base.get_pin_by_flat_index(pin_idx).unwrap();
+            (pin.locked, pin.direction, n.base.kind)
+        } else {
+            return Err("Invalid node type".to_string());
+        };
+
+        // No change needed
+        if current_locked == locked {
+            return Ok(());
+        }
+
+        // Set the pin locked state
+        if let Some(n) = self.nodes[node_idx].downcast_mut::<CraftNode>() {
+            n.base.get_pin_by_flat_index_mut(pin_idx).unwrap().locked = locked;
+        } else if let Some(n) = self.nodes[node_idx].downcast_mut::<OrganizerNode>() {
+            n.base.get_pin_by_flat_index_mut(pin_idx).unwrap().locked = locked;
+        } else if let Some(n) = self.nodes[node_idx].downcast_mut::<GroupNode>() {
+            n.base.get_pin_by_flat_index_mut(pin_idx).unwrap().locked = locked;
+        } else if let Some(n) = self.nodes[node_idx].downcast_mut::<SinkNode>() {
+            n.base.get_pin_by_flat_index_mut(pin_idx).unwrap().locked = locked;
+        }
+
+        // Propagate lock to linked pin
+        if let Some(link) = self.find_link_by_pin(pin_id).cloned() {
+            let linked_pin_id = if link.start_pin_id == pin_id {
+                link.end_pin_id
+            } else {
+                link.start_pin_id
+            };
+            
+            // Get linked pin's locked state
+            if let Some((linked_node_id, _linked_direction, linked_pin_idx)) = self.find_pin_location(linked_pin_id) {
+                let linked_node_idx = self.find_node_index(linked_node_id).unwrap();
+                let linked_locked = if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<CraftNode>() {
+                    n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
+                } else if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<OrganizerNode>() {
+                    n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
+                } else if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<GroupNode>() {
+                    n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
+                } else if let Some(n) = self.nodes[linked_node_idx].downcast_ref::<SinkNode>() {
+                    n.base.get_pin_by_flat_index(linked_pin_idx).unwrap().locked
+                } else {
+                    false
+                };
+                
+                if linked_locked != locked {
+                    self.set_pin_locked(linked_pin_id, locked)?;
+                }
+            }
+        }
+
+        // Apply node-specific locking rules
+        use crate::node::NodeKind;
+        use crate::pin::PinDirection;
+        
+        match node_kind {
+            NodeKind::Craft | NodeKind::Group | NodeKind::GameSplitter => {
+                // Lock all pins in the node
+                let all_pin_ids: Vec<u64> = if let Some(n) = self.nodes[node_idx].downcast_ref::<CraftNode>() {
+                    n.base.all_pins().map(|p| p.id).collect()
+                } else if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
+                    n.base.all_pins().map(|p| p.id).collect()
+                } else if let Some(n) = self.nodes[node_idx].downcast_ref::<GroupNode>() {
+                    n.base.all_pins().map(|p| p.id).collect()
+                } else {
+                    Vec::new()
+                };
+                
+                for pid in all_pin_ids {
+                    if pid != pin_id {
+                        let (pid_node_id, _pid_direction, pi) = self.find_pin_location(pid).unwrap();
+                        let pid_node_idx = self.find_node_index(pid_node_id).unwrap();
+                        let p_locked = if let Some(n) = self.nodes[pid_node_idx].downcast_ref::<CraftNode>() {
+                            n.base.get_pin_by_flat_index(pi).unwrap().locked
+                        } else if let Some(n) = self.nodes[pid_node_idx].downcast_ref::<OrganizerNode>() {
+                            n.base.get_pin_by_flat_index(pi).unwrap().locked
+                        } else if let Some(n) = self.nodes[pid_node_idx].downcast_ref::<GroupNode>() {
+                            n.base.get_pin_by_flat_index(pi).unwrap().locked
+                        } else {
+                            false
+                        };
+                        
+                        if p_locked != locked {
+                            self.set_pin_locked(pid, locked)?;
+                        }
+                    }
+                }
+            }
+            NodeKind::Merger | NodeKind::CustomSplitter => {
+                // Complex multi-pin logic
+                let is_custom_splitter = node_kind == NodeKind::CustomSplitter;
+                
+                // Get multi-pin side (outs for CustomSplitter, ins for Merger)
+                let (multi_pin_ids, single_pin_id) = if let Some(n) = self.nodes[node_idx].downcast_ref::<OrganizerNode>() {
+                    let multi: Vec<u64> = if is_custom_splitter {
+                        n.base.outs.iter().map(|p| p.id).collect()
+                    } else {
+                        n.base.ins.iter().map(|p| p.id).collect()
+                    };
+                    
+                    let single = if is_custom_splitter {
+                        n.base.ins.first().map(|p| p.id)
+                    } else {
+                        n.base.outs.first().map(|p| p.id)
+                    };
+                    
+                    (multi, single)
+                } else {
+                    (Vec::new(), None)
+                };
+                
+                // Count locked/unlocked multi pins
+                let mut all_locked_ids = Vec::new();
+                let mut all_unlocked_ids = Vec::new();
+                
+                for &mpid in &multi_pin_ids {
+                    if let Some((mpid_node_id, _mpid_direction, pi)) = self.find_pin_location(mpid) {
+                        let mpid_node_idx = self.find_node_index(mpid_node_id).unwrap();
+                        let is_locked = if let Some(n) = self.nodes[mpid_node_idx].downcast_ref::<OrganizerNode>() {
+                            n.base.get_pin_by_flat_index(pi).unwrap().locked
+                        } else {
+                            false
+                        };
+                        
+                        if is_locked {
+                            all_locked_ids.push(mpid);
+                        } else {
+                            all_unlocked_ids.push(mpid);
+                        }
+                    }
+                }
+                
+                // Single pin updated (input for CustomSplitter, output for Merger)
+                let is_single_side = (direction == PinDirection::Input && is_custom_splitter) ||
+                                    (direction == PinDirection::Output && !is_custom_splitter);
+                
+                if is_single_side {
+                    // If locked and only one unlocked multi pin remaining, lock it
+                    if locked && all_unlocked_ids.len() == 1 {
+                        self.set_pin_locked(all_unlocked_ids[0], locked)?;
+                    }
+                    // If unlocked and all multi pins are locked, unlock all multi pins
+                    else if !locked && all_unlocked_ids.is_empty() {
+                        for &mpid in &multi_pin_ids {
+                            self.set_pin_locked(mpid, locked)?;
+                        }
+                    }
+                } else {
+                    // Multi pin updated
+                    if let Some(spid) = single_pin_id {
+                        let single_locked = if let Some((spid_node_id, _spid_direction, pi)) = self.find_pin_location(spid) {
+                            let spid_node_idx = self.find_node_index(spid_node_id).unwrap();
+                            if let Some(n) = self.nodes[spid_node_idx].downcast_ref::<OrganizerNode>() {
+                                n.base.get_pin_by_flat_index(pi).unwrap().locked
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        
+                        // If all multi pins locked, lock single pin
+                        if all_unlocked_ids.is_empty() {
+                            if !single_locked {
+                                self.set_pin_locked(spid, true)?;
+                            }
+                        }
+                        // If we just locked and single is locked with only one unlocked, lock last one
+                        else if locked && single_locked && all_unlocked_ids.len() == 1 {
+                            self.set_pin_locked(all_unlocked_ids[0], locked)?;
+                        }
+                        // If we just unlocked, single was locked, and now one unlocked, unlock single
+                        else if !locked && single_locked && all_unlocked_ids.len() == 1 {
+                            self.set_pin_locked(spid, locked)?;
+                        }
+                    }
+                }
+            }
+            NodeKind::Sink => {
+                // No special logic for sink nodes
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get count of nodes in the graph
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Get all recipe names (stub for UI)
+    pub fn get_recipe_names(&self) -> Vec<String> {
+        // TODO: Implement recipe tracking
+        Vec::new()
+    }
+
+    /// Check if there are unsaved changes (stub for UI)
+    pub fn has_unsaved_changes(&self) -> bool {
+        // TODO: Implement change tracking
+        false
+    }
+
+    /// Load production chain from JSON string
+    pub fn load_from_json(&mut self, json: &str, game_data: Option<&GameData>) -> Result<(), String> {
+        let file: ProductionChainFile = serde_json::from_str(json)
+            .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
+        self.load_from_file(file, game_data)
+    }
+
+    /// Load production chain from file structure
+    pub fn load_from_file(&mut self, file: ProductionChainFile, game_data: Option<&GameData>) -> Result<(), String> {
+        // Clear existing data
+        self.nodes.clear();
+        self.links.clear();
+        self.next_id = 1;
+
+        // Load nodes
+        for (idx, serialized_node) in file.nodes.iter().enumerate() {
+            self.load_node(serialized_node, idx, game_data)?;
+        }
+
+        // Load links
+        for serialized_link in &file.links {
+            self.load_link(serialized_link)?;
+        }
+
+        Ok(())
+    }
+
+    /// Load a single node from serialized format
+    fn load_node(&mut self, serialized: &SerializedNode, _node_index: usize, game_data: Option<&GameData>) -> Result<(), String> {
+        match serialized {
+            SerializedNode::Craft(craft) => {
+                let node_id = self.get_next_id();
+                let mut node = CraftNode::new(node_id, craft.recipe.clone());
+                node.base.position = (craft.pos.x, craft.pos.y);
+                node.current_rate = craft.rate.clone().into();
+                node.built = craft.built;
+                node.num_somersloop = FractionalNumber::from(craft.num_somersloop as i64);
+                
+                // Create pins from recipe if game data is available
+                if let Some(gd) = game_data {
+                    if let Some(recipe) = gd.recipes().iter().find(|r| r.name == craft.recipe) {
+                        // Create input pins
+                        for counted_item in &recipe.ins {
+                            let pin_id = self.get_next_id();
+                            let pin = Pin::new(
+                                pin_id,
+                                PinDirection::Input,
+                                node_id,
+                                Some(counted_item.item_name.clone()),
+                                false,
+                                counted_item.quantity,
+                            );
+                            node.base.ins.push(pin);
+                        }
+                        
+                        // Create output pins
+                        for counted_item in &recipe.outs {
+                            let pin_id = self.get_next_id();
+                            let pin = Pin::new(
+                                pin_id,
+                                PinDirection::Output,
+                                node_id,
+                                Some(counted_item.item_name.clone()),
+                                false,
+                                counted_item.quantity,
+                            );
+                            node.base.outs.push(pin);
+                        }
+                    }
+                }
+                
+                self.nodes.push(Box::new(node));
+            }
+            SerializedNode::Sink(sink) => {
+                let node_id = self.get_next_id();
+                let mut node = SinkNode::new(node_id, None);
+                node.base.position = (sink.pos.x, sink.pos.y);
+                
+                // Create input pins for each sink input
+                for input in &sink.ins {
+                    let pin_id = self.get_next_id();
+                    let rate = FractionalNumber::new(input.num, input.den);
+                    let pin = Pin::new(
+                        pin_id,
+                        PinDirection::Input,
+                        node_id,
+                        Some(input.item.clone()),
+                        input.locked,
+                        rate,
+                    );
+                    node.base.ins.push(pin);
+                }
+                
+                self.nodes.push(Box::new(node));
+            }
+            SerializedNode::Organizer(org) => {
+                let kind = NodeKind::from_kind_id(org.kind)
+                    .ok_or_else(|| format!("Invalid node kind: {}", org.kind))?;
+                let node_id = self.get_next_id();
+                let mut node = OrganizerNode::new(node_id, kind, org.item.clone());
+                node.base.position = (org.pos.x, org.pos.y);
+                
+                // Pins for organizers will be dynamically created based on connections
+                self.nodes.push(Box::new(node));
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Load a link from serialized format
+    fn load_link(&mut self, serialized: &SerializedLink) -> Result<(), String> {
+        let start_node_idx = serialized.start.node;
+        let end_node_idx = serialized.end.node;
+        
+        if start_node_idx >= self.nodes.len() {
+            return Err(format!("Invalid start node index: {}", start_node_idx));
+        }
+        if end_node_idx >= self.nodes.len() {
+            return Err(format!("Invalid end node index: {}", end_node_idx));
+        }
+
+        // Get pin IDs from node indices and pin indices
+        let start_pin_id = self.get_pin_id_by_indices(start_node_idx, serialized.start.pin, PinDirection::Output)?;
+        let end_pin_id = self.get_pin_id_by_indices(end_node_idx, serialized.end.pin, PinDirection::Input)?;
+
+        // Create the link
+        let link_id = self.get_next_id();
+        let link = Link::new(link_id, start_pin_id, end_pin_id);
+        
+        // Update pin references
+        self.set_pin_link_id(start_pin_id, Some(link_id))?;
+        self.set_pin_link_id(end_pin_id, Some(link_id))?;
+        
+        self.links.push(link);
+        Ok(())
+    }
+
+    /// Get pin ID by node index and pin index within that node
+    fn get_pin_id_by_indices(&self, node_idx: usize, pin_idx: usize, direction: PinDirection) -> Result<u64, String> {
+        let node_box = &self.nodes[node_idx];
+        
+        // Try each node type
+        if let Some(craft) = node_box.downcast_ref::<CraftNode>() {
+            let pins = match direction {
+                PinDirection::Input => &craft.base.ins,
+                PinDirection::Output => &craft.base.outs,
+            };
+            return pins.get(pin_idx)
+                .map(|p| p.id)
+                .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
+        }
+        if let Some(sink) = node_box.downcast_ref::<SinkNode>() {
+            return sink.base.ins.get(pin_idx)
+                .map(|p| p.id)
+                .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
+        }
+        if let Some(org) = node_box.downcast_ref::<OrganizerNode>() {
+            let pins = match direction {
+                PinDirection::Input => &org.base.ins,
+                PinDirection::Output => &org.base.outs,
+            };
+            return pins.get(pin_idx)
+                .map(|p| p.id)
+                .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
+        }
+        if let Some(group) = node_box.downcast_ref::<GroupNode>() {
+            let pins = match direction {
+                PinDirection::Input => &group.base.ins,
+                PinDirection::Output => &group.base.outs,
+            };
+            return pins.get(pin_idx)
+                .map(|p| p.id)
+                .ok_or_else(|| format!("Pin index {} out of bounds", pin_idx));
+        }
+        
+        Err("Unknown node type".to_string())
+    }
+
+    /// Set link_id on a pin
+    fn set_pin_link_id(&mut self, pin_id: u64, link_id: Option<u64>) -> Result<(), String> {
+        for node_box in &mut self.nodes {
+            if let Some(craft) = node_box.downcast_mut::<CraftNode>() {
+                for pin in craft.base.ins.iter_mut().chain(craft.base.outs.iter_mut()) {
+                    if pin.id == pin_id {
+                        pin.link_id = link_id;
+                        return Ok(());
+                    }
+                }
+            } else if let Some(sink) = node_box.downcast_mut::<SinkNode>() {
+                for pin in &mut sink.base.ins {
+                    if pin.id == pin_id {
+                        pin.link_id = link_id;
+                        return Ok(());
+                    }
+                }
+            } else if let Some(org) = node_box.downcast_mut::<OrganizerNode>() {
+                for pin in org.base.ins.iter_mut().chain(org.base.outs.iter_mut()) {
+                    if pin.id == pin_id {
+                        pin.link_id = link_id;
+                        return Ok(());
+                    }
+                }
+            } else if let Some(group) = node_box.downcast_mut::<GroupNode>() {
+                for pin in group.base.ins.iter_mut().chain(group.base.outs.iter_mut()) {
+                    if pin.id == pin_id {
+                        pin.link_id = link_id;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Err(format!("Pin {} not found", pin_id))
+    }
+
+    /// Save production chain to JSON string
+    pub fn save_to_json(&self) -> Result<String, String> {
+        let file = self.save_to_file();
+        serde_json::to_string_pretty(&file)
+            .map_err(|e| format!("Failed to serialize JSON: {}", e))
+    }
+
+    /// Save production chain to file structure
+    pub fn save_to_file(&self) -> ProductionChainFile {
+        let mut nodes = Vec::new();
+        let mut links = Vec::new();
+
+        // Build node index map
+        let mut node_id_to_index = std::collections::HashMap::new();
+        for (idx, node_box) in self.nodes.iter().enumerate() {
+            let node_id = self.get_node_id(node_box);
+            node_id_to_index.insert(node_id, idx);
+        }
+
+        // Serialize nodes
+        for node_box in &self.nodes {
+            if let Some(serialized) = self.serialize_node(node_box) {
+                nodes.push(serialized);
+            }
+        }
+
+        // Serialize links
+        for link in &self.links {
+            if let Some(serialized) = self.serialize_link(link, &node_id_to_index) {
+                links.push(serialized);
+            }
+        }
+
+        ProductionChainFile {
+            game_version: "1.0".to_string(),
+            save_version: 5,
+            nodes,
+            links,
+        }
+    }
+
+    /// Get node ID from any node type
+    fn get_node_id(&self, node_box: &Box<dyn std::any::Any>) -> u64 {
+        if let Some(craft) = node_box.downcast_ref::<CraftNode>() {
+            craft.base.id
+        } else if let Some(sink) = node_box.downcast_ref::<SinkNode>() {
+            sink.base.id
+        } else if let Some(org) = node_box.downcast_ref::<OrganizerNode>() {
+            org.base.id
+        } else if let Some(group) = node_box.downcast_ref::<GroupNode>() {
+            group.base.id
+        } else {
+            0 // Should never happen
+        }
+    }
+
+    /// Serialize a node to the file format
+    fn serialize_node(&self, node_box: &Box<dyn std::any::Any>) -> Option<SerializedNode> {
+        if let Some(craft) = node_box.downcast_ref::<CraftNode>() {
+            Some(SerializedNode::Craft(SerializedCraftNode {
+                kind: 0,
+                recipe: craft.recipe_name.clone(),
+                rate: craft.current_rate.into(),
+                pos: SerializedPosition {
+                    x: craft.base.position.0,
+                    y: craft.base.position.1,
+                },
+                built: craft.built,
+                locked: false, // TODO: Track node-level lock
+                num_somersloop: craft.num_somersloop.numerator() as u8,
+            }))
+        } else if let Some(sink) = node_box.downcast_ref::<SinkNode>() {
+            let ins = sink.base.ins.iter().map(|pin| {
+                SerializedSinkInput {
+                    item: pin.item_name.clone().unwrap_or_default(),
+                    num: pin.base_rate.numerator(),
+                    den: pin.base_rate.denominator(),
+                    locked: pin.locked,
+                }
+            }).collect();
+
+            Some(SerializedNode::Sink(SerializedSinkNode {
+                kind: 5,
+                pos: SerializedPosition {
+                    x: sink.base.position.0,
+                    y: sink.base.position.1,
+                },
+                ins,
+            }))
+        } else if let Some(org) = node_box.downcast_ref::<OrganizerNode>() {
+            Some(SerializedNode::Organizer(SerializedOrganizerNode {
+                kind: org.base.kind.to_kind_id(),
+                pos: SerializedPosition {
+                    x: org.base.position.0,
+                    y: org.base.position.1,
+                },
+                item: org.item_name.clone(),
+            }))
+        } else {
+            None
+        }
+    }
+
+    /// Serialize a link to the file format
+    fn serialize_link(
+        &self,
+        link: &Link,
+        node_id_to_index: &std::collections::HashMap<u64, usize>,
+    ) -> Option<SerializedLink> {
+        // Find start and end pins
+        let start_loc = self.find_pin_location(link.start_pin_id)?;
+        let end_loc = self.find_pin_location(link.end_pin_id)?;
+
+        let start_node_idx = *node_id_to_index.get(&start_loc.0)?;
+        let end_node_idx = *node_id_to_index.get(&end_loc.0)?;
+
+        Some(SerializedLink {
+            start: SerializedLinkEndpoint {
+                node: start_node_idx,
+                pin: start_loc.2,  // Use direction-specific pin index
+            },
+            end: SerializedLinkEndpoint {
+                node: end_node_idx,
+                pin: end_loc.2,  // Use direction-specific pin index
+            },
+        })
+    }
+}
+
+impl Default for ProductionApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}

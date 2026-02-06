@@ -1,0 +1,188 @@
+{
+    "game_version": "1.0",
+    "links": [
+        {
+            "end": {
+                "node": 0,
+                "pin": 0
+            },
+            "start": {
+                "node": 1,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 0,
+                "pin": 1
+            },
+            "start": {
+                "node": 2,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 0,
+                "pin": 2
+            },
+            "start": {
+                "node": 3,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 5,
+                "pin": 0
+            },
+            "start": {
+                "node": 4,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 4,
+                "pin": 0
+            },
+            "start": {
+                "node": 6,
+                "pin": 0
+            }
+        },
+        {
+            "end": {
+                "node": 6,
+                "pin": 0
+            },
+            "start": {
+                "node": 7,
+                "pin": 0
+            }
+        }
+    ],
+    "nodes": [
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -7768.0,
+                "y": -2969.0
+            },
+            "rate": {
+                "den": 1,
+                "num": 1
+            },
+            "recipe": "Crystal Oscillator"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -8332.0,
+                "y": -2970.0
+            },
+            "rate": {
+                "den": 5,
+                "num": 4
+            },
+            "recipe": "Quartz Crystal"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -8312.0,
+                "y": -2870.0
+            },
+            "rate": {
+                "den": 15,
+                "num": 7
+            },
+            "recipe": "Cable"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": -8168.0,
+                "y": -2576.0
+            },
+            "rate": {
+                "den": 2,
+                "num": 1
+            },
+            "recipe": "Reinforced Iron Plate"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": 2329.0,
+                "y": 2166.0
+            },
+            "rate": {
+                "den": 16,
+                "num": 9
+            },
+            "recipe": "Iron Plate"
+        },
+        {
+            "ins": [
+                {
+                    "den": 4,
+                    "item": "Iron Plate",
+                    "locked": false,
+                    "num": 45
+                }
+            ],
+            "kind": 5,
+            "pos": {
+                "x": 2712.0,
+                "y": 2164.0
+            }
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": 1896.0,
+                "y": 2182.0
+            },
+            "rate": {
+                "den": 16,
+                "num": 9
+            },
+            "recipe": "Iron Ingot"
+        },
+        {
+            "built": false,
+            "kind": 0,
+            "locked": false,
+            "num_somersloop": 0,
+            "pos": {
+                "x": 1501.0,
+                "y": 2184.0
+            },
+            "rate": {
+                "den": 64,
+                "num": 9
+            },
+            "recipe": "Iron Ore (Limestone)"
+        }
+    ],
+    "save_version": 5
+}
