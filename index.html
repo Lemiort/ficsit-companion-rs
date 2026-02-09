@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+
+<!-- Disable zooming: -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+
+<head>
+    <!-- change this to your project name -->
+    <title>Ficsit Companion RS</title>
+
+    <!-- config for our rust wasm binary. go to https://trunkrs.dev/assets/#rust for more customization -->
+    
+<script type="module">
+import init, * as bindings from 'https://lemiort.github.io/ficsit-companion-rs/ficsit_companion_rs.js';
+const wasm = await init({ module_or_path: 'https://lemiort.github.io/ficsit-companion-rs/ficsit_companion_rs_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+    <!-- this is the base url relative to which other urls will be constructed. trunk will insert this from the public-url option -->
+    <base href="https://lemiort.github.io/ficsit-companion-rs/" />
+
+    <link rel="icon" href="https://lemiort.github.io/ficsit-companion-rs/favicon.ico" integrity="sha384-qd4gbYwnu1OgV0WE60ufqEvN7vG8f5KcdFX8ZE9AL8EpeSucBbJdf2clsCJc5vYk"/>
+
+
+    
+    
+    
+    
+    
+    
+
+    
+    
+
+
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="assets/icon_ios_touch_192.png">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="white">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#404040">
+
+    <style>
+        html {
+            /* Remove touch delay: */
+            touch-action: manipulation;
+        }
+
+        body {
+            /* Light mode background color for what is not covered by the egui canvas,
+            or where the egui canvas is translucent. */
+            background: #909090;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            body {
+                /* Dark mode background color for what is not covered by the egui canvas,
+                or where the egui canvas is translucent. */
+                background: #404040;
+            }
+        }
+
+        /* Allow canvas to fill entire web page: */
+        html,
+        body {
+            overflow: hidden;
+            margin: 0 !important;
+            padding: 0 !important;
+            height: 100%;
+            width: 100%;
+        }
+
+        /* Make canvas fill remaining document below header: */
+        canvas {
+            margin-right: auto;
+            margin-left: auto;
+            display: block;
+            position: absolute;
+            top: 3em; /* leave room for top bar */
+            left: 0;
+            width: 100%;
+            height: calc(100% - 3em);
+        }
+
+        .centered {
+            margin-right: auto;
+            margin-left: auto;
+            display: block;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #f0f0f0;
+            font-size: 24px;
+            font-family: Ubuntu-Light, Helvetica, sans-serif;
+            text-align: center;
+        }
+
+        /* ---------------------------------------------- */
+        /* Loading animation from https://loading.io/css/ */
+        .lds-dual-ring {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+        }
+
+        .lds-dual-ring:after {
+            content: " ";
+            display: block;
+            width: 24px;
+            height: 24px;
+            margin: 0px;
+            border-radius: 50%;
+            border: 3px solid #fff;
+            border-color: #fff transparent #fff transparent;
+            animation: lds-dual-ring 1.2s linear infinite;
+        }
+
+        @keyframes lds-dual-ring {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Top header similar to emscripten shell */
+        .top-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3em;
+            background-color: black;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 0;
+        }
+
+        .side {
+            display: flex;
+            align-items: center;
+        }
+
+        .icon {
+            height: 2.2em;
+            padding: 0.5em 0.5em;
+        }
+
+        .app-name {
+            color: white;
+            font-size: 1.05rem;
+            margin: 0;
+        }
+
+        .tip {
+            color: white;
+                height: 3em;
+                max-width: 50%;
+        }
+
+        svg { padding: 0.5em 0.5em; }
+
+        body { padding-top: 3em; }
+    </style>
+<link rel="modulepreload" href="https://lemiort.github.io/ficsit-companion-rs/ficsit_companion_rs.js" crossorigin="anonymous" integrity="sha384-YX6jLKHkhM1bUcavUgdR3ybovL81Q3jHFVCmAI6UPd3AsrNcm4PMxBxDiYmzghIp"><link rel="preload" href="https://lemiort.github.io/ficsit-companion-rs/ficsit_companion_rs_bg.wasm" crossorigin="anonymous" integrity="sha384-23hfNw244kBuQiLBG2Nofie+f6w3CjN1QTr0vHFZZkB/PC+O5kmV3o07p6YTpQMw" as="fetch" type="application/wasm"></head>
+
+<body>
+    <!-- Top fixed header (ported from emscripten shell) -->
+    <div class="top-bar" role="banner">
+        <div class="side">
+            <img src="assets/icon-256.png" alt="App icon" class="icon">
+            <h1 class="app-name">Ficsit Companion</h1>
+        </div>
+        <div class="side">
+            <h5 class="tip" id="tip">Tip: Loading tips...</h5>
+        </div>
+        <div class="side">
+            <a href="https://github.com/Lemiort/ficsit-companion-rs/releases" target="_blank" aria-label="Changelog" title="Changelog">
+                <h3 class="app-name">Changelog</h3>
+            </a>
+            <!-- <a href="https://discord.gg/JntZTZehQB" target="_blank" aria-label="Discord" title="Discord">
+                <svg aria-hidden="true" version="1.1" viewBox="0 0 16 16" height="2em" width="2em">
+                    <path fill="white" d="M13.545 2.907a13.2 13.2 0 0 0-3.257-1.011.05.05 0 0 0-.052.025c-.141.25-.297.577-.406.833a12.2 12.2 0 0 0-3.658 0 8 8 0 0 0-.412-.833.05.05 0 0 0-.052-.025c-1.125.194-2.22.534-3.257 1.011a.04.04 0 0 0-.021.018C.356 6.024-.213 9.047.066 12.032q.003.022.021.037a13.3 13.3 0 0 0 3.995 2.02.05.05 0 0 0 .056-.019q.463-.63.818-1.329a.05.05 0 0 0-.01-.059l-.018-.011a9 9 0 0 1-1.248-.595.05.05 0 0 1-.02-.066l.015-.019q.127-.095.248-.195a.05.05 0 0 1 .051-.007c2.619 1.196 5.454 1.196 8.041 0a.05.05 0 0 1 .053.007q.121.1.248.195a.05.05 0 0 1-.004.085 8 8 0 0 1-1.249.594.05.05 0 0 0-.03.03.05.05 0 0 0 .003.041c.24.465.515.909.817 1.329a.05.05 0 0 0 .056.019 13.2 13.2 0 0 0 4.001-2.02.05.05 0 0 0 .021-.037c.334-3.451-.559-6.449-2.366-9.106a.03.03 0 0 0-.02-.019m-8.198 7.307c-.789 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.45.73 1.438 1.613 0 .888-.637 1.612-1.438 1.612m5.316 0c-.788 0-1.438-.724-1.438-1.612s.637-1.613 1.438-1.613c.807 0 1.451.73 1.438 1.613 0 .888-.631 1.612-1.438 1.612"/>
+                </svg>
+            </a> -->
+            <a href="https://github.com/Lemiort/ficsit-companion-rs" target="_blank" aria-label="Github" title="GitHub">
+                <svg aria-hidden="true" version="1.1" viewBox="0 0 16 16" height="2em" width="2em">
+                    <path fill-rule="evenodd" fill="white" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+                </svg>
+            </a>
+        </div>
+    </div>
+
+    <!-- The WASM code will resize the canvas dynamically -->
+    <!-- the id is hardcoded in main.rs . so, make sure both match. -->
+    <canvas id="the_canvas_id"></canvas>
+
+    <!-- the loading spinner will be removed in main.rs -->
+    <div class="centered" id="loading_text">
+        <noscript>You need javascript to use this website</noscript>
+        <p style="font-size:16px">
+            Loading…
+        </p>
+        <div class="lds-dual-ring"></div>
+    </div>
+
+    <!--Register Service Worker. this will cache the wasm / js scripts for offline use (for PWA functionality). -->
+    <!-- Force refresh (Ctrl + F5) to load the latest files instead of cached files  -->
+    <script>
+        // We disable caching during development so that we always view the latest version.
+        if ('serviceWorker' in navigator && window.location.hash !== "#dev") {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('sw.js');
+            });
+        }
+    </script>
+
+    <script>
+        const tips = [
+            "You can freely move nodes using Alt",
+            "You can nudge selected nodes using keyboard arrows",
+            "You can select multiple nodes using Ctrl+left click",
+            "You can group the currently selected nodes using Ctrl+G",
+            "You can unpack a selected node group using Ctrl+G",
+            "You can focus on the current graph using F",
+            "You can delete a node using delete",
+            "You can select all nodes using Ctrl+A",
+            "A link between two pins will be displayed in red if both ends are not equal",
+            "A splitter node will be displayed in red if its outputs sum don't match its input",
+            "A merger node will be displayed in red if its inputs sum don't match its output",
+            "A group node will be displayed in red if some of its internal nodes were not loaded properly from a file",
+            "There are two kinds of splitters: one for which all outputs are equal, and one for which they are independent",
+            "An invalid link for a sink will be displayed in orange",
+            "You can set values using complex expressions such as (7.2 - 4.8) + 2 / (4/3 - 1/3)",
+            "You can track your build progress by clicking the checkbox on the top right corner of craft nodes",
+            "A craft node marked as built will be displayed with a green border",
+            "If an update is impossible due to a pin going to negative value, it will be displayed in red",
+            "You can lock or unlock a pin using Right Click",
+            "You can lock or unlock a full node using Right Click",
+            "A purple rate means it's currently locked",
+            "The current graph is automatically saved on exit",
+            "Pins can't be locked inside a group node, but a full group node can be locked",
+            "You can duplicate all selected nodes using Ctrl + D",
+            "You can quickly find a given recipe in a graph by clicking on it on the left panel",
+            "You can quickly find a given item in a graph by clicking on it on the left panel",
+        ];
+
+        function updateTip() {
+            const el = document.getElementById('tip');
+            if (!el) return;
+            el.textContent = "Tip: " + tips[Math.floor(Math.random() * tips.length)];
+            // Also set native title for full tooltip on hover
+            el.title = el.textContent;
+        }
+        updateTip();
+        setInterval(updateTip, 60000);
+    </script>
+</body>
+
+</html>
+
+<!-- Powered by egui: https://github.com/emilk/egui/ -->
