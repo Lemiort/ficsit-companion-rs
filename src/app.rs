@@ -66,9 +66,6 @@ struct SnarlViewer {
     // Buffer for temporary locks created by auto-wiring so we can restore original state later
     temporary_locks: Vec<TemporaryLock>,
 
-    // Recent pin edit successes (node_id, direction, pin_idx) -> Instant
-    pub pin_success: std::collections::HashMap<(u64, PinDirection, usize), std::time::Instant>,
-
     // Map of item name -> TextureId supplied by the app so the viewer can resolve icons immediately
     icon_map: std::collections::HashMap<String, egui::TextureId>,
 
@@ -620,12 +617,6 @@ impl SnarlViewer {
 
             self.node_cache.insert(node_id, display);
         }
-    }
-
-    // Mark a successful pin edit (record time)
-    fn mark_pin_success(&mut self, node_id: u64, dir: PinDirection, idx: usize) {
-        self.pin_success
-            .insert((node_id, dir, idx), std::time::Instant::now());
     }
 
     // Render a fractional number input similar to C++ RenderInputText.
@@ -2317,7 +2308,6 @@ impl Default for TemplateApp {
                 ui_locked_nodes: std::collections::HashSet::new(),
                 // Temporary locks recorded during auto-wiring to be restored later
                 temporary_locks: Vec::new(),
-                pin_success: std::collections::HashMap::new(),
                 icon_map: std::collections::HashMap::new(),
                 recipes: Vec::new(),
                 context_menu_recipe_filter: String::new(),
@@ -4532,8 +4522,6 @@ impl TemplateApp {
                             // Success feedback and refresh affected nodes (the node itself and direct neighbors)
                             self.emit_message("Updated pin rate", log::Level::Info);
                             nodes_to_refresh.push(node_id);
-                            // Mark pin success (inline UI indicator)
-                            self.snarl_viewer.mark_pin_success(node_id, dir, idx);
 
                             // Update edit buffers immediately so UI reflects the change
                             // The cache will be rebuilt at the start of the next frame
